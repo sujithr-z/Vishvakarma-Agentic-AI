@@ -669,7 +669,7 @@ def index_page():
     """
 
 
-def save_state_and_dashboard(state, open_gui: bool = False):
+def save_state_and_dashboard(state, open_gui: bool = True):
     """Save dashboard image and cached state JSON, optionally popping up GUI window."""
     import json
     from pathlib import Path
@@ -688,7 +688,7 @@ def save_state_and_dashboard(state, open_gui: bool = False):
     return dash_path
 
 
-def interactive_cli(max_iterations: int = 10, auto_gui: bool = False):
+def interactive_cli(max_iterations: int = 10, auto_gui: bool = True):
     """Interactive Command-Line Terminal Interface for continuous conversation."""
     from app.visualization.dashboard import launch_dashboard_gui_process
     print("=" * 70)
@@ -712,9 +712,12 @@ def interactive_cli(max_iterations: int = 10, auto_gui: bool = False):
                 continue
 
             state = agent.run(user_query=user_input, max_iterations=max_iterations)
+            should_open_gui = auto_gui and getattr(state, "intent", "") != "greeting"
             try:
-                dash_path = save_state_and_dashboard(state, open_gui=auto_gui)
+                dash_path = save_state_and_dashboard(state, open_gui=should_open_gui)
                 print(f"[DASHBOARD] 3-Panel Matplotlib visualization saved to: {dash_path}")
+                if should_open_gui:
+                    print("[GUI] Auto-launched live 3-Panel interactive Matplotlib visualization window.")
             except Exception as vis_err:
                 pass
 
@@ -744,13 +747,16 @@ def cli_main():
     parser = argparse.ArgumentParser(description="Vishvakarma-Agentic-AI CLI & Server")
     parser.add_argument("--cli", type=str, help="Run agent directly with a single query")
     parser.add_argument("-i", "--interactive", action="store_true", help="Start interactive terminal REPL")
-    parser.add_argument("--gui", action="store_true", help="Launch interactive Matplotlib visual app window alongside output")
+    parser.add_argument("--gui", action="store_true", help="Explicitly enable live Matplotlib visual app window (default: enabled)")
+    parser.add_argument("--no-gui", action="store_true", help="Disable automatic live Matplotlib visual app window popup")
     parser.add_argument("--view", action="store_true", help="Open live Matplotlib dashboard app viewer for latest analysis")
     parser.add_argument("--server", action="store_true", help="Start FastAPI Web Server")
     parser.add_argument("--iterations", type=int, default=10, help="Max iterations")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="API host")
     parser.add_argument("--port", type=int, default=8000, help="API port")
     args = parser.parse_args()
+
+    auto_gui = not args.no_gui
 
     if args.view:
         from app.visualization.dashboard import launch_dashboard_gui_process
@@ -759,11 +765,12 @@ def cli_main():
     elif args.cli:
         print("\nStarting Vishvakarma-Agentic-AI CLI...")
         state = agent.run(user_query=args.cli, max_iterations=args.iterations)
+        should_open_gui = auto_gui and getattr(state, "intent", "") != "greeting"
         try:
-            dash_path = save_state_and_dashboard(state, open_gui=args.gui)
+            dash_path = save_state_and_dashboard(state, open_gui=should_open_gui)
             print(f"\n[DASHBOARD] 3-Panel Matplotlib visualization saved to: {dash_path}")
-            if args.gui:
-                print("[GUI] Launched live 3-Panel interactive Matplotlib application.")
+            if should_open_gui:
+                print("[GUI] Auto-launched live 3-Panel interactive Matplotlib application.")
         except Exception as vis_err:
             print(f"\n[DASHBOARD] Notice: {vis_err}")
         print("\n" + "=" * 70)
@@ -779,7 +786,7 @@ def cli_main():
         uvicorn.run(app, host=args.host, port=args.port)
     else:
         # Default to interactive CLI mode when run without arguments
-        interactive_cli(max_iterations=args.iterations, auto_gui=args.gui)
+        interactive_cli(max_iterations=args.iterations, auto_gui=auto_gui)
 
 
 if __name__ == "__main__":

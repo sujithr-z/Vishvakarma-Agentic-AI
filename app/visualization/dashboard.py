@@ -163,7 +163,7 @@ def launch_dashboard_gui_process(save_path: Optional[str] = "data/analysis_dashb
         "from app.visualization.dashboard import show_interactive_dashboard\n"
         "state = {'user_query': 'Live Analysis', 'status': 'Completed', 'run_id': 'Live-Viewer'}\n"
         "try:\n"
-        "    with open('data/last_state.json', 'r') as f:\n"
+        "    with open('data/last_state.json', 'r', encoding='utf-8') as f:\n"
         "        state = json.load(f)\n"
         "except Exception:\n"
         "    pass\n"
