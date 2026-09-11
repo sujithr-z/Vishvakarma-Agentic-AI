@@ -1,0 +1,56 @@
+[
+  {
+    "id": "example_kerala_5p",
+    "title": "Low-Cost Hot-Humid Modular Shelter for 5 Occupants (Kerala)",
+    "user_query": "Design a low-cost modular shelter for 5 people in a hot-humid environment (Kerala) with a budget of ₹80,000.",
+    "location": "Kerala",
+    "capacity": 5,
+    "budget": 80000,
+    "climate": "hot_humid",
+    "building_type": "modular_shelter",
+    "expected_design": {
+      "dimensions": "4.9m x 3.7m x 2.8m",
+      "roof_ventilation": 0.8,
+      "roof_overhang": 0.9,
+      "wall_opening_ratio": 0.35,
+      "estimated_cost": 76500,
+      "thermal_score": 0.78,
+      "structural_score": 0.85
+    }
+  },
+  {
+    "id": "example_assam_4p",
+    "title": "Flood-Resilient Disaster Relief Modular Shelter (Assam)",
+    "user_query": "Design a flood-resilient disaster relief modular shelter for 4 people in Assam under ₹75,000.",
+    "location": "Assam",
+    "capacity": 4,
+    "budget": 75000,
+    "climate": "hot_humid",
+    "building_type": "disaster_relief",
+    "expected_design": {
+      "dimensions": "4.4m x 3.3m x 2.8m",
+      "roof_ventilation": 0.8,
+      "roof_overhang": 0.9,
+      "wall_opening_ratio": 0.35,
+      "estimated_cost": 68000,
+      "thermal_score": 0.78,
+      "structural_score": 0.88
+    }
+  },
+  {
+    "id": "example_modular_analysis",
+    "title": "Thermal Constraint Analysis for Aid Modular House (TERI-2021 & TARU-2015)",
+    "user_query": "Analyze the model modular house. What thermal constraints could it exceed?",
+    "location": "Kerala",
+    "capacity": 5,
+    "budget": 80000,
+    "climate": "hot_humid",
+    "building_type": "modular_shelter",
+    "expected_design": {
+      "dimensions": "4.9m x 3.7m x 2.8m",
+      "thermal_constraints_checked": ["TC-001", "TC-004", "TC-005", "TC-006", "TC-009"],
+      "cool_roof_treatment": "High-SRI Cool Roof Paint",
+      "cost_impact_year": 2014
+    }
+  }
+]

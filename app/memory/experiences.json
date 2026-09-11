@@ -1,0 +1,277 @@
+[
+  {
+    "id": "exp_101",
+    "timestamp": "2026-09-01T10:00:00Z",
+    "project_id": "proj_aid_modular_01",
+    "building_id": "bldg_mod_01",
+    "user_request": "Design an aid-centric modular shelter for 5 people in a hot-humid environment (Kerala) with budget of 80,000 INR.",
+    "intent": "design_generation",
+    "climate_context": {
+      "location": "Kerala",
+      "climate": "hot_humid",
+      "temperature_c": 33.5,
+      "rh_percent": 82.0,
+      "wind_speed_ms": 2.2,
+      "solar_radiation_w_m2": 720.0,
+      "trm_c": 28.6
+    },
+    "initial_design": {
+      "version": 1,
+      "name": "Modular-Aid-Shelter-v1",
+      "building_type": "modular_shelter",
+      "capacity": 5,
+      "dimensions": {"length_m": 4.5, "width_m": 3.6, "height_m": 2.8, "floor_area_m2": 16.2},
+      "roof": {"type": "corrugated_sheet", "ventilation": 0.4, "overhang": 0.5, "cool_roof": "none", "sri": 0.35},
+      "walls": {"material": "modular_composite_panel", "opening_ratio": 0.15, "has_cross_ventilation": false}
+    },
+    "thermal_result": {
+      "thermal_score": 0.52,
+      "indoor_operative_temp_c": 34.2,
+      "upper_limit_c": 30.65,
+      "passed": false
+    },
+    "constraints_detected": [
+      {"constraint_id": "TC-001", "name": "High Indoor Operative Temperature", "status": "VIOLATED"},
+      {"constraint_id": "TC-004", "name": "Insufficient Air Speed", "status": "VIOLATED"},
+      {"constraint_id": "TC-005", "name": "Inadequate Operable Opening Area", "status": "AT_RISK"},
+      {"constraint_id": "TC-006", "name": "Cool-Roof Qualification Failure", "status": "VIOLATED"}
+    ],
+    "actions_taken": [
+      "get_climate",
+      "search_knowledge",
+      "generate_design",
+      "evaluate_thermal",
+      "modify_design",
+      "evaluate_thermal",
+      "evaluate_cost",
+      "evaluate_structure",
+      "save_experience",
+      "finish"
+    ],
+    "improvements": [
+      {
+        "parameter": "cool_roof_treatment",
+        "current_value": "None (SRI 0.35)",
+        "recommended_value": "High-SRI Cool Roof Coating (Reflectance >= 0.60)",
+        "expected_effect": "2.0 - 4.0 °C indoor reduction",
+        "source": "TARU-2015 §2"
+      },
+      {
+        "parameter": "opening_ratio",
+        "current_value": "15%",
+        "recommended_value": "35% (with opposite wall vents)",
+        "expected_effect": "Elevates living zone air velocity to 0.8 m/s, offsetting 3-4 °C",
+        "source": "TERI-2021 §4.4.5"
+      },
+      {
+        "parameter": "roof_overhang",
+        "current_value": "0.5m",
+        "recommended_value": "0.9m",
+        "expected_effect": "Prevents solar gain and shields monsoon rain",
+        "source": "TERI-2021 §4.5"
+      }
+    ],
+    "final_design": {
+      "version": 2,
+      "name": "Modular-Aid-Shelter-v2",
+      "building_type": "modular_shelter",
+      "capacity": 5,
+      "dimensions": {"length_m": 4.5, "width_m": 3.6, "height_m": 2.8, "floor_area_m2": 16.2},
+      "roof": {"type": "corrugated_sheet_with_cool_coating", "ventilation": 0.8, "overhang": 0.9, "cool_roof": "high_sri_paint", "sri": 0.82},
+      "walls": {"material": "modular_composite_panel", "opening_ratio": 0.35, "has_cross_ventilation": true}
+    },
+    "final_evaluation": {
+      "thermal": {"passed": true, "thermal_score": 0.82, "indoor_operative_temp_c": 29.8},
+      "cost": {"passed": true, "total_cost": 76500.0, "budget": 80000.0},
+      "structure": {"passed": true, "load_bearing_ok": true}
+    },
+    "cost_impact": {
+      "total_inr": 76500.0,
+      "itemized": [
+        {"item": "Modular Panel Core Structure", "cost_inr": 62000.0},
+        {"item": "High-SRI Cool Roof Paint", "cost_inr": 3200.0},
+        {"item": "Deep Overhang Framing & Louvre Panels", "cost_inr": 11300.0}
+      ],
+      "year": 2014,
+      "notes": "2014 INR historical baseline"
+    },
+    "success": true,
+    "failure_reason": null,
+    "key_learnings": "For hot-humid modular shelters, baseline 15% opening ratio caused severe overheating; increasing opening ratio to 35% with cross-ventilation and applying high-SRI cool roof coating reduced operative temperature by 4.4 °C and passed NBC adaptive comfort."
+  },
+  {
+    "id": "exp_102",
+    "timestamp": "2026-09-02T14:30:00Z",
+    "project_id": "proj_relief_flood_02",
+    "building_id": "bldg_mod_02",
+    "user_request": "Design a flood-resilient modular shelter for 4 people in Assam under 75,000 INR.",
+    "intent": "design_generation",
+    "climate_context": {
+      "location": "Assam",
+      "climate": "hot_humid",
+      "temperature_c": 31.0,
+      "rh_percent": 88.0,
+      "wind_speed_ms": 1.8,
+      "solar_radiation_w_m2": 650.0,
+      "trm_c": 27.5
+    },
+    "initial_design": {
+      "version": 1,
+      "name": "Disaster-Relief-Panel-Shelter-v1",
+      "building_type": "disaster_relief",
+      "capacity": 4,
+      "dimensions": {"length_m": 4.0, "width_m": 3.2, "height_m": 2.7, "floor_area_m2": 12.8},
+      "roof": {"type": "gi_sheet", "ventilation": 0.3, "overhang": 0.4, "cool_roof": "none", "sri": 0.30},
+      "walls": {"material": "treated_bamboo_composite", "opening_ratio": 0.20, "has_cross_ventilation": false}
+    },
+    "thermal_result": {
+      "thermal_score": 0.55,
+      "indoor_operative_temp_c": 33.8,
+      "upper_limit_c": 30.15,
+      "passed": false
+    },
+    "constraints_detected": [
+      {"constraint_id": "TC-001", "name": "High Indoor Operative Temperature", "status": "VIOLATED"},
+      {"constraint_id": "TC-004", "name": "Insufficient Air Speed", "status": "VIOLATED"}
+    ],
+    "actions_taken": [
+      "get_climate",
+      "search_knowledge",
+      "generate_design",
+      "evaluate_thermal",
+      "modify_design",
+      "evaluate_thermal",
+      "evaluate_cost",
+      "evaluate_structure",
+      "save_experience",
+      "finish"
+    ],
+    "improvements": [
+      {
+        "parameter": "roof_shading",
+        "current_value": "Bare GI Sheet",
+        "recommended_value": "Bamboo Shading Screen over roof with air gap",
+        "expected_effect": "2.0 - 4.0 °C reduction",
+        "source": "TARU-2015 §4"
+      },
+      {
+        "parameter": "stilt_elevation",
+        "current_value": "0.3m",
+        "recommended_value": "1.0m stilt elevation with floor ventilation vents",
+        "expected_effect": "Flood protection + sub-floor convective cooling",
+        "source": "TERI-2021 §4.4"
+      }
+    ],
+    "final_design": {
+      "version": 2,
+      "name": "Disaster-Relief-Panel-Shelter-v2",
+      "building_type": "disaster_relief",
+      "capacity": 4,
+      "dimensions": {"length_m": 4.0, "width_m": 3.2, "height_m": 2.7, "floor_area_m2": 12.8},
+      "roof": {"type": "gi_sheet_bamboo_shade", "ventilation": 0.85, "overhang": 0.85, "cool_roof": "bamboo_screen", "sri": 0.75},
+      "walls": {"material": "treated_bamboo_composite", "opening_ratio": 0.32, "has_cross_ventilation": true}
+    },
+    "final_evaluation": {
+      "thermal": {"passed": true, "thermal_score": 0.80, "indoor_operative_temp_c": 28.9},
+      "cost": {"passed": true, "total_cost": 71800.0, "budget": 75000.0},
+      "structure": {"passed": true, "load_bearing_ok": true}
+    },
+    "cost_impact": {
+      "total_inr": 71800.0,
+      "itemized": [
+        {"item": "Stilted Bamboo Frame & Floor Deck", "cost_inr": 48000.0},
+        {"item": "Elevated Bamboo Roof Shading Trellis", "cost_inr": 12800.0},
+        {"item": "Louvered Wall Apertures", "cost_inr": 11000.0}
+      ],
+      "year": 2014,
+      "notes": "2014 INR historical baseline"
+    },
+    "success": true,
+    "failure_reason": null,
+    "key_learnings": "Elevating the modular shelter onto 1.0m stilts with a ventilated sub-floor and bamboo roof shading trellis provided flood resilience while dropping indoor operative temperatures below the 30.15 °C adaptive limit."
+  },
+  {
+    "id": "exp_103",
+    "timestamp": "2026-09-03T09:15:00Z",
+    "project_id": "proj_hot_dry_relief_03",
+    "building_id": "bldg_mod_03",
+    "user_request": "Evaluate thermal comfort and design a modular shelter for Rajasthan in peak dry heat.",
+    "intent": "thermal_analysis",
+    "climate_context": {
+      "location": "Rajasthan",
+      "climate": "hot_dry",
+      "temperature_c": 42.0,
+      "rh_percent": 22.0,
+      "wind_speed_ms": 3.0,
+      "solar_radiation_w_m2": 850.0,
+      "trm_c": 33.0
+    },
+    "initial_design": {
+      "version": 1,
+      "name": "Modular-Relief-Unit-v1",
+      "building_type": "modular_shelter",
+      "capacity": 5,
+      "dimensions": {"length_m": 5.0, "width_m": 3.5, "height_m": 3.0, "floor_area_m2": 17.5},
+      "roof": {"type": "bare_metal_deck", "ventilation": 0.2, "overhang": 0.3, "cool_roof": "none", "sri": 0.25},
+      "walls": {"material": "single_skin_sheet", "opening_ratio": 0.30, "has_cross_ventilation": true}
+    },
+    "thermal_result": {
+      "thermal_score": 0.40,
+      "indoor_operative_temp_c": 40.5,
+      "upper_limit_c": 33.05,
+      "passed": false
+    },
+    "constraints_detected": [
+      {"constraint_id": "TC-001", "name": "High Indoor Operative Temperature", "status": "VIOLATED"},
+      {"constraint_id": "TC-006", "name": "Cool-Roof Qualification Failure", "status": "VIOLATED"},
+      {"constraint_id": "TC-007", "name": "Roof Insulation Below Code", "status": "VIOLATED"}
+    ],
+    "actions_taken": [
+      "get_climate",
+      "analyze_thermal_constraints",
+      "calculate_improvement_cost",
+      "save_experience",
+      "finish"
+    ],
+    "improvements": [
+      {
+        "parameter": "cool_roof_treatment",
+        "current_value": "Bare Metal (SRI 0.25)",
+        "recommended_value": "Inverted Earthen Pots / Hollow Clay Tiles + High SRI Coating",
+        "expected_effect": "3.0 - 5.0 °C reduction",
+        "source": "TARU-2015 §3 & §5"
+      },
+      {
+        "parameter": "night_ventilation_shading",
+        "current_value": "Continuous Day Apertures",
+        "recommended_value": "Daytime shading closures + active night ventilation purge",
+        "expected_effect": "Stores night coolth in thermal mass, dampening peak midday spikes",
+        "source": "TERI-2021 §4.8"
+      }
+    ],
+    "final_design": {
+      "version": 1,
+      "name": "Modular-Relief-Unit-v1-Analyzed",
+      "building_type": "modular_shelter",
+      "capacity": 5,
+      "dimensions": {"length_m": 5.0, "width_m": 3.5, "height_m": 3.0, "floor_area_m2": 17.5},
+      "roof": {"type": "bare_metal_deck", "ventilation": 0.2, "overhang": 0.3, "cool_roof": "none", "sri": 0.25},
+      "walls": {"material": "single_skin_sheet", "opening_ratio": 0.30, "has_cross_ventilation": true}
+    },
+    "final_evaluation": {
+      "thermal": {"passed": false, "indoor_operative_temp_c": 40.5}
+    },
+    "cost_impact": {
+      "total_inr": 18500.0,
+      "itemized": [
+        {"item": "Inverted Pots & Thermal Mass Insulation", "cost_inr": 14500.0},
+        {"item": "Exterior Solar Shading Louvres", "cost_inr": 4000.0}
+      ],
+      "year": 2014,
+      "notes": "2014 INR historical baseline"
+    },
+    "success": true,
+    "failure_reason": null,
+    "key_learnings": "Single-skin uninsulated metal roofs in hot-dry Rajasthan heat create extreme radiative overheating (40.5 °C). High thermal mass (inverted pots) combined with daytime envelope closure and nighttime ventilation purge is essential."
+  }
+]
