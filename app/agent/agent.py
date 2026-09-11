@@ -11,6 +11,7 @@ from app.agent.state import AgentState
 from app.agent.planner import SYSTEM_PROMPT, build_planner_prompt, detect_intent
 from app.agent.parser import parse_decision, AgentDecision
 from app.tools.registry import get_tool, TOOLS
+from app.hallucination.pipeline import TieredHallucinationManager
 from app.evaluation.evaluator import evaluate_all, critique
 from app.memory.repository import (
     save_agent_run,
@@ -110,6 +111,7 @@ class Vishvakarma:
         self.verbose = verbose
         self.active_run_id: Optional[str] = None
         self.active_building_id: Optional[str] = None
+        self.hallucination_manager = TieredHallucinationManager(self.llm, list(TOOLS.keys()))
 
     def _log(self, tag: str, message: str):
         """Formatted console logging for visual agent traces."""
@@ -260,6 +262,15 @@ class Vishvakarma:
             )
             self._log("RAW_QWEN_OUTPUT", raw_response.strip().replace("\n", " ")[:200])
             decision = parse_decision(raw_response)
+            # Run hallucination audit & mitigation
+            decision_dict = decision.model_dump()
+            decision_dict, _ = self.hallucination_manager.assess_and_mitigate(state, decision_dict)
+            # Ensure the decision dict contains required fields; otherwise fallback to original decision
+            if not decision_dict.get("type"):
+                # Fallback to the initially parsed decision if mitigation yielded an empty/invalid dict
+                decision = decision
+            else:
+                decision = AgentDecision(**decision_dict)
         except Exception as err:
             err_msg = str(err)
             self._log("INVALID_DECISION", err_msg)
