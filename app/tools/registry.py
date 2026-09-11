@@ -84,18 +84,6 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
             "query": {"type": "string", "description": "Search query for past cases"},
             "climate": {"type": "string", "description": "Target climate filter"}
         }
-    },
-    "answer": {
-        "description": "Provide a direct response or clarification to the user.",
-        "arguments": {
-            "message": {"type": "string", "description": "The response message"}
-        }
-    },
-    "finish": {
-        "description": "Signal that the shelter design and validation task is complete, and present the final shelter proposal.",
-        "arguments": {
-            "summary": {"type": "string", "description": "Comprehensive final summary of the validated shelter design"}
-        }
     }
 }
 

@@ -1,48 +1,46 @@
 """Planner and Context Builder providing state, observations, and tools for genuine LLM reasoning."""
 import json
+import re
 from typing import Any, Dict, List
 from app.agent.state import AgentState
 from app.tools.registry import TOOL_SCHEMAS
 from app.memory.repository import retrieve_relevant_experiences
 
-SYSTEM_PROMPT = """You are Vishvakarma, an autonomous reasoning agent for climate-resilient modular shelter design and thermal comfort engineering in India.
-Your engineering foundations are:
-1. NBC 2016: National Building Code of India (Adaptive Thermal Comfort Equations)
-2. TERI-2021: Thermal Comfort Prescription for Cooling Dominated Indian Residential Buildings
-3. TARU-2015: Handbook on Achieving Thermal Comfort within Built Environment – Vol II
+SYSTEM_PROMPT = """You are Vishvakarma, an autonomous reasoning agent for climate-resilient modular shelter design and thermal engineering in India.
 
-CRITICAL OPERATIONAL RULES:
-1. NO EVIDENCE -> NO CLAIM: Never invent measurements, environmental parameters, engineering thresholds, or cost figures. If a value is unknown, retrieve it with a tool, calculate it, or state that it is unavailable.
-2. YOU ARE THE BRAIN: Python is only your execution environment. You independently inspect what information you have, what is missing, and what action to take next.
-3. CONDITIONAL TOOL CALLING: Only invoke tools that are strictly necessary for the user's specific request. (e.g. For pure knowledge questions, search knowledge or answer; do not call climate/thermal tools unnecessarily).
-4. INTERPRET OBSERVATIONS: On each step, review previous observations and their source/status before making your next decision.
-5. HANDLE TOOL ERRORS & INVALID ACTIONS: If a tool fails or an action was invalid, inspect the error observation and choose an alternative or answer.
-6. COMPLETION: When you have sufficient evidence to answer or fulfill the request, choose action 'finish' or 'answer'.
+You interact with an external environment by making decisions. On each turn, you must return EXACTLY ONE valid JSON object of type 'tool' OR type 'final'.
 
-DECISION OUTPUT FORMAT:
-Respond with ONLY a single valid JSON object.
-Format A (Tool invocation):
+DECISION FORMAT 1 — INVOKE A TOOL:
+Use this when you need to fetch information, perform calculations, evaluate models, or search knowledge.
 ```json
 {
-  "action": "<tool_name>",
-  "arguments": { "<arg_name>": <value> },
-  "reason": "<one sentence explaining why this tool is needed given current evidence>"
+  "type": "tool",
+  "tool_name": "get_climate",
+  "arguments": {"location": "Kerala"},
+  "reason": "Climate conditions are required for thermal engineering analysis."
 }
 ```
-Format B (Final answer / Completion):
+
+DECISION FORMAT 2 — RETURN FINAL ANSWER:
+Use this when you have sufficient evidence to answer, or when no tools are required (e.g. general math, definitions, or finished reports).
 ```json
 {
-  "action": "answer",
-  "arguments": { "message": "<your technical answer or summary>" },
-  "reason": "<explanation of why evidence is sufficient to answer>"
+  "type": "final",
+  "content": "Your complete technical answer or final response goes here."
 }
 ```
+
+OPERATIONAL RULES:
+1. ONLY use registered tool names in tool_name. Never invent tool names.
+2. Never output placeholder names like <tool_name>, <finish tool name>, or <answer tool name>.
+3. If sufficient evidence already exists or no tool is needed, return type 'final'.
+4. NO EVIDENCE -> NO CLAIM: Never invent measurements, thresholds, or costs. If data is unknown, retrieve it or state that it is unavailable.
+5. All cool-roof costs are based on TARU-2015 2014 INR rates.
 """
 
 
 def detect_intent(query: str) -> str:
     """Classify user query into operational intent."""
-    import re
     q = query.strip().lower()
     
     # 1. Greetings & conversational welcome
@@ -50,25 +48,34 @@ def detect_intent(query: str) -> str:
     if re.match(greeting_pattern, q) or q in ["hi", "hello", "hey", "help", "who are you", "what can you do"]:
         return "greeting"
 
-    # 2. Pure Knowledge Queries
+    # 2. General / Out of domain queries (Math, General knowledge, Python, etc.)
+    # Check for basic arithmetic like "1 + 1", "2*5", "sqrt(16)"
+    if re.match(r"^[\d\s+\-*/().^=]+$", q) or any(q.startswith(p) for p in ["what is python", "what is 2", "calculate 1", "who was", "who is"]):
+        if not any(k in q for k in ["shelter", "thermal", "climate", "comfort", "teri", "taru", "nbc", "roof", "insulation", "cost"]):
+            return "general_query"
+
+    # 3. Pure Knowledge Queries
     if any(k in q for k in ["what is thermal comfort", "define thermal comfort", "explain nbc 2016", "what is teri", "explain adaptive comfort", "what is cool roof"]):
         return "knowledge_query"
 
-    # 3. Simple Calculation / Cost Query
+    # 4. Simple Calculation / Cost Query
     if any(k in q for k in ["calculate cost", "cost of", "how much will", "improvement cost", "cost impact"]) and not any(k in q for k in ["design a", "create a"]):
         return "calculation_query"
 
-    # 4. Thermal Analysis / Diagnostic
+    # 5. Thermal Analysis / Diagnostic
     if any(k in q for k in ["thermal constraint", "constraints could it exceed", "analyze", "thermal behavior", "thermally weak", "what should i change", "what happens if", "comfort"]):
         return "thermal_analysis"
 
-    # 5. Suitability check
-    elif any(k in q for k in ["suitable", "suitability", "appropriate for"]):
+    # 6. Suitability check
+    if any(k in q for k in ["suitable", "suitability", "appropriate for"]):
         return "suitability_check"
 
-    # 6. Design generation
-    else:
+    # 7. Design generation
+    if any(k in q for k in ["design", "shelter", "modular", "house", "building", "roof", "kerala", "assam", "rajasthan"]):
         return "design_generation"
+
+    # 8. General fallback for other queries
+    return "general_query"
 
 
 def format_tool_descriptions() -> str:
@@ -83,7 +90,7 @@ def format_tool_descriptions() -> str:
 def format_retrieved_experiences(experiences: List[Dict[str, Any]]) -> str:
     """Format previous PostgreSQL experiences into prompt context."""
     if not experiences:
-        return "None recorded for this climate/context."
+        return "None recorded for this context."
     lines = []
     for idx, exp in enumerate(experiences, 1):
         loc = exp.get("climate_context", {}).get("location", "Unknown")
@@ -97,7 +104,7 @@ def format_retrieved_experiences(experiences: List[Dict[str, Any]]) -> str:
 def format_observations(state: AgentState) -> str:
     """Format labeled chronological observations for Qwen."""
     if not state.observations:
-        return "None yet (Initial Reasoning Step)."
+        return "None yet (Initial Step)."
     
     lines = []
     for obs in state.observations:
@@ -107,21 +114,23 @@ def format_observations(state: AgentState) -> str:
 
 def build_state_summary(state: AgentState) -> str:
     """Build a concise, objective summary of what is known vs missing without prescribing actions."""
+    if state.intent == "general_query":
+        return "- Context: General Query (No shelter design state required unless requested)"
+
     lines = []
-    
     # Building State
     if state.current_design:
         d = state.current_design
         lines.append(f"- Building Design: AVAILABLE ({d.get('name', 'Modular-Shelter')} v{d.get('version', 1)}, Capacity: {d.get('capacity', 5)} occupants, Budget: ₹{d.get('budget', 80000):,.0f}, Floor: {d.get('dimensions', {}).get('floor_area_sqm', 24)} m², Wall Opening: {d.get('openings', {}).get('opening_to_floor_ratio', 0.20)*100:.0f}%, Roof Vent: {'Yes' if d.get('roof', {}).get('ventilation') else 'No'})")
     else:
-        lines.append("- Building Design: MISSING / NOT YET GENERATED")
+        lines.append("- Building Design: MISSING / NOT YET SPECIFIED")
 
     # Climate State
     if state.requirements.get("climate_data"):
         c = state.requirements["climate_data"]
         lines.append(f"- Environmental Climate: AVAILABLE (Location: {c.get('location', 'Kerala')}, Zone: {c.get('climate', 'hot_humid')}, Temp: {c.get('temperature', 33.0)}°C, RH: {c.get('humidity', 82.0)}%, Wind: {c.get('wind_speed', 2.8)} m/s, Trm: {c.get('trm', 32.0)}°C)")
     elif state.requirements.get("location"):
-        lines.append(f"- Environmental Climate: PENDING FETCH for '{state.requirements.get('location')}'")
+        lines.append(f"- Environmental Climate: NOT YET RETRIEVED for '{state.requirements.get('location')}'")
     else:
         lines.append("- Environmental Climate: NOT YET RETRIEVED")
 
@@ -169,7 +178,7 @@ def build_state_summary(state: AgentState) -> str:
 
 def build_planner_prompt(state: AgentState) -> str:
     """
-    Construct contextual Observe -> Reason prompt for Qwen 1.8B without any hardcoded checklists.
+    Construct contextual Observe -> Reason prompt for Qwen 1.8B without placeholder syntax.
     """
     intent = detect_intent(state.user_query)
     state.intent = intent
@@ -192,14 +201,28 @@ def build_planner_prompt(state: AgentState) -> str:
         return f"""### AGENT STATUS (Step {state.iteration}) | Intent: GREETING:
 User Query: "{state.user_query}"
 
-Respond with ONLY the JSON answer to welcome the user:
+Respond with ONLY this JSON final decision:
 ```json
 {{
-  "action": "answer",
-  "arguments": {{
-    "message": {json.dumps(welcome_msg)}
-  }},
-  "reason": "Welcome user and introduce thermal shelter design capabilities."
+  "type": "final",
+  "content": {json.dumps(welcome_msg)}
+}}
+```"""
+
+    if intent == "general_query":
+        return f"""================================================================================
+USER REQUEST:
+"{state.user_query}"
+================================================================================
+
+This request is a general question or calculation.
+If no shelter tools are needed, answer directly using type 'final'.
+
+Respond with ONLY a single valid JSON object:
+```json
+{{
+  "type": "final",
+  "content": "Your direct answer here."
 }}
 ```"""
 
@@ -207,7 +230,6 @@ Respond with ONLY the JSON answer to welcome the user:
     state_summary = build_state_summary(state)
     obs_summary = format_observations(state)
 
-    # Retrieve relevant experiences from PostgreSQL memory
     climate = state.requirements.get("climate", "hot_humid")
     location = state.requirements.get("location", "Kerala")
     relevant_exps = retrieve_relevant_experiences(
@@ -233,22 +255,30 @@ PREVIOUS OBSERVATIONS & EVIDENCE:
 RELEVANT PREVIOUS EXPERIENCES (FROM POSTGRESQL MEMORY):
 {exp_summary}
 
-AVAILABLE TOOLS:
+AVAILABLE REGISTERED TOOLS:
 {tools_desc}
 
 DECIDE THE NEXT ACTION:
 Carefully inspect the USER REQUEST, CURRENT SITUATION, and PREVIOUS OBSERVATIONS.
-- If you need additional data or calculations to fulfill the user request, choose the appropriate tool and provide its arguments.
-- If you have sufficient evidence to complete the task or answer the question, select action 'finish' (or 'answer') and provide the final technical response.
+- If you need to fetch data or run engineering calculations, output type 'tool' with a valid tool_name from the registered tools list.
+- If you have gathered sufficient evidence to fulfill the user request, output type 'final' with your complete technical response in 'content'.
 - Do NOT call unnecessary tools.
 - Strict Rule: NO EVIDENCE -> NO CLAIM. Never fabricate missing values.
 
-Respond with ONLY a single valid JSON object for your chosen action:
+Respond with ONLY a single valid JSON object in one of the two formats:
 ```json
 {{
-  "action": "<tool_name or finish or answer>",
-  "arguments": {{ ... }},
-  "reason": "<why this action was chosen based on current evidence>"
+  "type": "tool",
+  "tool_name": "get_climate",
+  "arguments": {{"location": "Kerala"}},
+  "reason": "Need climate observations before running thermal evaluation."
+}}
+```
+OR
+```json
+{{
+  "type": "final",
+  "content": "Final technical report or response."
 }}
 ```"""
     return prompt

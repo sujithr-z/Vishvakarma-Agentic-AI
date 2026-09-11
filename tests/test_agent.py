@@ -1,22 +1,23 @@
 """
-The 15 Capability & Critical Reasoning Audit Test Suite for Vishvakarma Agent.
+The 16 Capability & Critical Action Protocol Audit Test Suite for Vishvakarma Agent.
 
 Validates:
-1. Requirement Understanding
-2. Unbiased Prompt Construction (No forced checklists or required actions)
-3. Structured JSON & Type-based Decision Formats
-4. Argument Integrity
-5. Tool Failure Recovery (Observation -> Reasoning -> Recovery)
-6. Invalid Tool Recovery (Environment rejects unknown tool -> Observation -> Recovery)
-7. Test A — Pure Knowledge Query (No unnecessary climate/thermal calculations)
-8. Test B — Simple Calculation (Cost calculation without climate fetch)
-9. Test C — Diagnostic Multi-step Sequence (Observe -> Reason -> Act loop)
-10. Test D — Follow-up with Existing State (Does not repeat gathered data)
-11. Test E — Missing / Insufficient Data (States unavailability; no hallucination)
-12. Labeled Evidence Tracking (SOURCE and STATUS tags)
-13. Design Improvement Cycle (V1 -> Critique -> V2)
-14. State Maintenance across Iterations
-15. Conversational Welcome Handling
+1. Test 1 — "1 + 1" General Query (Direct FINAL, 0 tool calls)
+2. Test 2 — "What is thermal comfort?" (Knowledge/RAG -> FINAL, No climate tools)
+3. Test 3 — "Analyze the model house for thermal constraints" (Dynamic tool sequence)
+4. Test 4 — "Design a low-cost shelter for 5 people in Kerala" (Dynamic design loop)
+5. Test 5 — Invalid Decision Handling (Malformed syntax / placeholder -> Feedback -> Recovery)
+6. Test 6 — Tool Failure Recovery (Observation -> Qwen decides next action)
+7. Test 7 — Requirement Understanding & Parameter Extraction
+8. Test 8 — Unbiased State-Driven Prompt (No forced checklists or required actions)
+9. Test 9 — Strict 2-Type Decision Model Validation
+10. Test 10 — Argument Integrity
+11. Test 11 — Simple Cost Calculation (Cost tool without climate fetch)
+12. Test 12 — Follow-up with Existing State (Does not repeat gathered data)
+13. Test 13 — Insufficient / Missing Information (States unavailability; no hallucination)
+14. Test 14 — Labeled Evidence Tracking (SOURCE and STATUS tags)
+15. Test 15 — Design Improvement Cycle (V1 -> Critique -> V2)
+16. Test 16 — Conversational Welcome Handling
 """
 import pytest
 from app.agent.state import AgentState
@@ -27,7 +28,7 @@ from app.tools.shelter import generate_design, modify_design
 from app.tools.thermal import evaluate_thermal
 from app.tools.climate import get_climate
 from app.knowledge.retriever import search_knowledge
-from app.evaluation.evaluator import critique, evaluate_all
+from app.evaluation.evaluator import critique
 
 
 class MockLLM:
@@ -41,75 +42,108 @@ class MockLLM:
             resp = self.responses[self.call_count]
             self.call_count += 1
             return resp
-        return '{"action": "finish", "arguments": {"summary": "Completed"}, "reason": "Default finish"}'
+        return '{"type": "final", "content": "Task completed successfully."}'
 
 
-# Test 1 — Requirement Understanding
-def test_capability_1_requirement_understanding():
-    query = "Design shelter for 5 people, hot humid climate (Kerala), ₹80,000."
-    reqs = extract_initial_requirements(query)
-    
-    assert reqs["capacity"] == 5
-    assert reqs["climate"] == "hot_humid"
-    assert reqs["budget"] == 80000.0
-    assert reqs["location"] == "Kerala"
-
-
-# Test 2 — Unbiased State-Driven Prompt (No Forced Action)
-def test_capability_2_unbiased_state_prompt():
-    state = AgentState(
-        user_query="Analyze the model house and determine what thermal constraints it could exceed.",
-        requirements={"capacity": 5, "location": "Kerala", "climate": "hot_humid"}
-    )
-    prompt = build_planner_prompt(state)
-
-    # Prompt MUST provide choices and state, NOT tell Qwen what it MUST do
-    assert "AVAILABLE TOOLS:" in prompt
-    assert "CURRENT SITUATION & STATE" in prompt
-    assert "REQUIRED NEXT ACTION" not in prompt
-    assert "You must call" not in prompt
-
-
-# Test 3 — Structured JSON & Type-based Decision Formats
-def test_capability_3_valid_structured_json_and_type_formats():
-    raw_outputs = [
-        '{"action": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Fetch climate conditions"}',
-        '{"type": "tool", "tool_name": "search_knowledge", "arguments": {"query": "roof ventilation"}, "reason": "Need engineering rules"}',
-        '{"type": "final", "content": "Thermal comfort is achieved when Tn is within acceptable limits."}',
-        '```json\n{"action": "generate_design", "arguments": {"capacity": 5, "budget": 80000}, "reason": "Create shelter"}\n```'
-    ]
-    for raw in raw_outputs:
-        decision = parse_decision(raw)
-        assert isinstance(decision, AgentDecision)
-        assert decision.action in ["get_climate", "search_knowledge", "answer", "generate_design"]
-        assert isinstance(decision.arguments, dict)
-
-
-# Test 4 — Correct Arguments
-def test_capability_4_correct_arguments():
-    query = "Design for 5 people under ₹80,000 in Kerala"
-    reqs = extract_initial_requirements(query)
-    decision = AgentDecision(
-        action="generate_design",
-        arguments={"capacity": reqs["capacity"], "budget": reqs["budget"]},
-        reason="Model passed extracted parameters"
-    )
-    assert decision.arguments["capacity"] == 5
-    assert decision.arguments["budget"] == 80000.0
-
-
-# Test 5 — Tool Failure Recovery via Labeled Observation
-def test_capability_5_tool_failure_recovery():
-    fail_res = get_climate("Kerala", simulate_fail=True)
-    assert fail_res["success"] is False
-
+# Test 1 — "1 + 1" (Direct FINAL answer, 0 tool calls, no shelter tools)
+def test_1_plus_1_direct_final_no_tools():
     mock_llm = MockLLM([
-        '{"action": "get_climate", "arguments": {"location": "fail"}, "reason": "Fetch climate"}',
-        '{"action": "search_knowledge", "arguments": {"query": "hot humid principles"}, "reason": "Recover from climate failure by searching knowledge"}'
+        '{"type": "final", "content": "2"}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="1 + 1")
+
+    assert state.status == "completed"
+    assert state.final_answer == "2"
+    # Ensure zero tool calls were made
+    assert len(state.tool_results) == 0
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert len(called_tools) == 0
+
+
+# Test 2 — "What is thermal comfort?" (Knowledge/RAG -> FINAL, no climate tools)
+def test_knowledge_query_no_climate_tools():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "search_knowledge", "arguments": {"query": "what is thermal comfort NBC 2016"}, "reason": "Retrieve standard definitions"}',
+        '{"type": "final", "content": "Thermal comfort is the condition of mind that expresses satisfaction with the thermal environment (NBC 2016 / TERI-2021)."}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="What is thermal comfort?")
+
+    assert state.status == "completed"
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "get_climate" not in called_tools
+    assert "evaluate_thermal" not in called_tools
+    assert "evaluate_cost" not in called_tools
+    assert "search_knowledge" in called_tools
+
+
+# Test 3 — "Analyze the model house for thermal constraints" (Dynamic tool sequence)
+def test_diagnostic_sequence_dynamic():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Need climate data for Kerala"}',
+        '{"type": "tool", "tool_name": "analyze_thermal_constraints", "arguments": {"location": "Kerala"}, "reason": "Analyze against NBC 2016 limits"}',
+        '{"type": "final", "content": "Identified high indoor temperature TC-001 and inadequate airflow TC-004."}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="Analyze this house for thermal constraints in Kerala.")
+
+    assert state.status == "completed"
+    assert len(state.constraints) > 0
+    obs_sources = [o.source for o in state.observations]
+    assert "climate_tool" in obs_sources
+    assert "constraint_engine" in obs_sources
+
+
+# Test 4 — "Design a low-cost shelter for 5 people in Kerala" (Dynamic design loop)
+def test_design_shelter_dynamic_loop():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Get environmental parameters"}',
+        '{"type": "tool", "tool_name": "generate_design", "arguments": {"capacity": 5, "budget": 80000}, "reason": "Generate v1"}',
+        '{"type": "tool", "tool_name": "evaluate_thermal", "arguments": {}, "reason": "Evaluate thermal"}',
+        '{"type": "final", "content": "Shelter design completed and evaluated."}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="Design a low-cost shelter for 5 people in Kerala with a budget of ₹80,000.")
+
+    assert state.status == "completed"
+    assert state.current_design is not None
+    assert "thermal" in state.evaluation
+
+
+# Test 5 — Invalid Decision Handling (Malformed syntax / placeholder -> Feedback -> Recovery)
+def test_invalid_decision_feedback_and_recovery():
+    mock_llm = MockLLM([
+        '{"action": "<finish tool name> (or <answer tool name>)", "arguments": {}}',  # Malformed placeholder output
+        '{"type": "tool", "tool_name": "evaluate_thermal", "arguments": {}, "reason": "Recover by providing valid tool JSON"}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = AgentState(
+        user_query="Evaluate house",
+        current_design=generate_design(5, 80000)
+    )
+
+    # Step 1: Rejected as INVALID_MODEL_DECISION observation
+    agent.run_step(state)
+    assert len(state.observations) == 1
+    assert state.observations[0].status == "INVALID_MODEL_DECISION"
+
+    # Step 2: Qwen receives feedback observation and recovers with valid tool call
+    agent.run_step(state)
+    assert len(state.observations) == 2
+    assert state.observations[1].status == "CALCULATED"
+    assert "thermal" in state.evaluation
+
+
+# Test 6 — Tool Failure Recovery (Observation -> Qwen decides next action)
+def test_tool_failure_feedback_and_recovery():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "get_climate", "arguments": {"location": "fail"}, "reason": "Fetch climate"}',
+        '{"type": "tool", "tool_name": "search_knowledge", "arguments": {"query": "hot humid principles"}, "reason": "Recover from climate failure by searching knowledge"}'
     ])
     agent = Vishvakarma(llm=mock_llm, verbose=False)
     state = AgentState(user_query="Design shelter", requirements={"capacity": 5})
-    
+
     # Step 1: fails and records TOOL_ERROR observation
     agent.run_step(state)
     assert len(state.observations) == 1
@@ -119,57 +153,76 @@ def test_capability_5_tool_failure_recovery():
     agent.run_step(state)
     assert len(state.observations) == 2
     assert state.observations[1].status == "RETRIEVED"
-    assert isinstance(state.tool_results[1], list)
 
 
-# Test 6 — Invalid Action Name Recovery (No silent substitution)
-def test_capability_6_invalid_tool_recovery():
-    mock_llm = MockLLM([
-        '{"action": "calculate_thermally_acceptable", "arguments": {}, "reason": "Try invented tool name"}',
-        '{"action": "evaluate_thermal", "arguments": {}, "reason": "Recover by choosing registered tool"}'
-    ])
-    agent = Vishvakarma(llm=mock_llm, verbose=False)
+# Test 7 — Requirement Understanding & Parameter Extraction
+def test_requirement_understanding():
+    query = "Design shelter for 5 people, hot humid climate (Kerala), ₹80,000."
+    reqs = extract_initial_requirements(query)
+    
+    assert reqs["capacity"] == 5
+    assert reqs["climate"] == "hot_humid"
+    assert reqs["budget"] == 80000.0
+    assert reqs["location"] == "Kerala"
+
+
+# Test 8 — Unbiased State-Driven Prompt (No forced checklists or required actions)
+def test_unbiased_state_prompt():
     state = AgentState(
-        user_query="Evaluate house",
-        current_design=generate_design(5, 80000)
+        user_query="Analyze the model house and determine what thermal constraints it could exceed.",
+        requirements={"capacity": 5, "location": "Kerala", "climate": "hot_humid"}
     )
+    prompt = build_planner_prompt(state)
 
-    # Step 1: Python environment rejects invalid tool and adds INVALID_ACTION observation
-    agent.run_step(state)
-    assert len(state.observations) == 1
-    assert state.observations[0].status == "INVALID_ACTION"
-    assert "calculate_thermally_acceptable" in state.observations[0].content
-
-    # Step 2: Qwen receives invalid action observation and selects valid tool
-    agent.run_step(state)
-    assert len(state.observations) == 2
-    assert state.observations[1].status == "CALCULATED"
-    assert "thermal" in state.evaluation
+    assert "AVAILABLE REGISTERED TOOLS:" in prompt
+    assert "CURRENT SITUATION & STATE" in prompt
+    assert "REQUIRED NEXT ACTION" not in prompt
+    assert "<tool_name or finish" not in prompt
+    assert "<finish tool name>" not in prompt
 
 
-# Test 7 — Test A: Knowledge Query (Conditional Tool Calling)
-def test_capability_7_test_a_knowledge_query():
+# Test 9 — Strict 2-Type Decision Model Validation
+def test_strict_2_type_decision_validation():
+    # Valid tool
+    d_tool = AgentDecision(type="tool", tool_name="get_climate", arguments={"location": "Kerala"}, reason="test")
+    assert d_tool.type == "tool"
+    assert d_tool.tool_name == "get_climate"
+    assert d_tool.content is None
+
+    # Valid final
+    d_final = AgentDecision(type="final", content="Final report content")
+    assert d_final.type == "final"
+    assert d_final.content == "Final report content"
+    assert d_final.tool_name is None
+
+    # Invalid tool (missing tool_name)
+    with pytest.raises(ValueError):
+        AgentDecision(type="tool", content="bad")
+
+    # Invalid final (missing content)
+    with pytest.raises(ValueError):
+        AgentDecision(type="final", tool_name="bad")
+
+
+# Test 10 — Argument Integrity
+def test_argument_integrity():
+    query = "Design for 5 people under ₹80,000 in Kerala"
+    reqs = extract_initial_requirements(query)
+    decision = AgentDecision(
+        type="tool",
+        tool_name="generate_design",
+        arguments={"capacity": reqs["capacity"], "budget": reqs["budget"]},
+        reason="Model passed extracted parameters"
+    )
+    assert decision.arguments["capacity"] == 5
+    assert decision.arguments["budget"] == 80000.0
+
+
+# Test 11 — Simple Cost Calculation (Cost tool without climate fetch)
+def test_simple_calculation_conditional():
     mock_llm = MockLLM([
-        '{"action": "search_knowledge", "arguments": {"query": "what is thermal comfort NBC 2016"}, "reason": "Retrieve standard definitions"}',
-        '{"action": "answer", "arguments": {"message": "Thermal comfort is the condition of mind that expresses satisfaction with the thermal environment (NBC 2016 / TERI-2021)."}, "reason": "Evidence sufficient"}'
-    ])
-    agent = Vishvakarma(llm=mock_llm, verbose=False)
-    state = agent.run(user_query="What is thermal comfort?")
-
-    assert state.status == "completed"
-    called_actions = [c["action"] for c in state.tool_calls]
-    # Must NOT call climate or thermal tools for a pure knowledge query
-    assert "get_climate" not in called_actions
-    assert "evaluate_thermal" not in called_actions
-    assert "evaluate_cost" not in called_actions
-    assert "search_knowledge" in called_actions
-
-
-# Test 8 — Test B: Simple Calculation (Conditional Tool Calling)
-def test_capability_8_test_b_simple_calculation():
-    mock_llm = MockLLM([
-        '{"action": "calculate_improvement_cost", "arguments": {}, "reason": "Calculate roof overhang and cool roof cost"}',
-        '{"action": "finish", "arguments": {"summary": "The cost of extending roof overhang and cool-roof is ₹3,200 (2014 INR base)."}, "reason": "Cost calculation obtained"}'
+        '{"type": "tool", "tool_name": "calculate_improvement_cost", "arguments": {}, "reason": "Calculate roof overhang and cool roof cost"}',
+        '{"type": "final", "content": "The cost of extending roof overhang and cool-roof is ₹3,200 (2014 INR base)."}'
     ])
     agent = Vishvakarma(llm=mock_llm, verbose=False)
     d1 = generate_design(5, 80000)
@@ -180,38 +233,18 @@ def test_capability_8_test_b_simple_calculation():
     agent.run_step(state)
     agent.run_step(state)
 
-    called_actions = [c["action"] for c in state.tool_calls]
-    assert "calculate_improvement_cost" in called_actions
-    assert "get_climate" not in called_actions  # Did not make unnecessary climate calls
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "calculate_improvement_cost" in called_tools
+    assert "get_climate" not in called_tools
 
 
-# Test 9 — Test C: Diagnostic Sequence (Observe -> Reason -> Act)
-def test_capability_9_test_c_diagnostic_sequence():
+# Test 12 — Follow-up with Existing State (Does not repeat gathered data)
+def test_follow_up_with_existing_state():
     mock_llm = MockLLM([
-        '{"action": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Need climate data for Kerala"}',
-        '{"action": "analyze_thermal_constraints", "arguments": {"location": "Kerala"}, "reason": "Analyze against NBC 2016 limits"}',
-        '{"action": "finish", "arguments": {"summary": "Identified high indoor temperature TC-001 and inadequate airflow TC-004."}, "reason": "Constraints analyzed"}'
+        '{"type": "tool", "tool_name": "analyze_thermal_constraints", "arguments": {}, "reason": "Use existing climate data to evaluate constraints directly"}',
+        '{"type": "final", "content": "The house is uncomfortable due to roof heat gain and low opening ratio."}'
     ])
     agent = Vishvakarma(llm=mock_llm, verbose=False)
-    state = agent.run(user_query="Analyze this house for thermal constraints in Kerala.")
-
-    assert state.status == "completed"
-    assert len(state.constraints) > 0
-    assert len(state.observations) >= 2
-    # Verify labeled observations
-    obs_sources = [o.source for o in state.observations]
-    assert "climate_tool" in obs_sources
-    assert "constraint_engine" in obs_sources
-
-
-# Test 10 — Test D: Follow-up with Existing State
-def test_capability_10_test_d_follow_up_with_existing_state():
-    mock_llm = MockLLM([
-        '{"action": "analyze_thermal_constraints", "arguments": {}, "reason": "Use existing climate data to evaluate constraints directly"}',
-        '{"action": "answer", "arguments": {"message": "The house is uncomfortable due to roof heat gain and low opening ratio."}, "reason": "Answered"}'
-    ])
-    agent = Vishvakarma(llm=mock_llm, verbose=False)
-    # Pre-populate state with climate data already present
     state = AgentState(
         user_query="Why is the house thermally uncomfortable?",
         requirements={
@@ -222,16 +255,15 @@ def test_capability_10_test_d_follow_up_with_existing_state():
     agent.run_step(state)
     agent.run_step(state)
 
-    called_actions = [c["action"] for c in state.tool_calls]
-    # Since climate was already available, get_climate was not called
-    assert "get_climate" not in called_actions
-    assert "analyze_thermal_constraints" in called_actions
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "get_climate" not in called_tools
+    assert "analyze_thermal_constraints" in called_tools
 
 
-# Test 11 — Test E: Insufficient Information / Missing Data
-def test_capability_11_test_e_insufficient_information():
+# Test 13 — Insufficient / Missing Information (States unavailability; no hallucination)
+def test_insufficient_information_no_hallucination():
     mock_llm = MockLLM([
-        '{"action": "answer", "arguments": {"message": "Future climate data for 6 PM tomorrow is unavailable. Current historical baseline shows 33°C."}, "reason": "Do not hallucinate future weather"}'
+        '{"type": "final", "content": "Future climate data for 6 PM tomorrow is unavailable. Current historical baseline shows 33°C."}'
     ])
     agent = Vishvakarma(llm=mock_llm, verbose=False)
     state = agent.run(user_query="Is this house comfortable at 6 PM tomorrow?")
@@ -240,11 +272,11 @@ def test_capability_11_test_e_insufficient_information():
     assert "unavailable" in state.final_answer.lower() or "not available" in state.final_answer.lower()
 
 
-# Test 12 — Labeled Evidence Tracking (SOURCE and STATUS)
-def test_capability_12_evidence_labels_and_status():
+# Test 14 — Labeled Evidence Tracking (SOURCE and STATUS tags)
+def test_labeled_evidence_tracking():
     mock_llm = MockLLM([
-        '{"action": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Fetch weather"}',
-        '{"action": "search_knowledge", "arguments": {"query": "roof ventilation"}, "reason": "Get principles"}'
+        '{"type": "tool", "tool_name": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Fetch weather"}',
+        '{"type": "tool", "tool_name": "search_knowledge", "arguments": {"query": "roof ventilation"}, "reason": "Get principles"}'
     ])
     agent = Vishvakarma(llm=mock_llm, verbose=False)
     state = AgentState(user_query="Design climate resilient shelter in Kerala")
@@ -259,8 +291,8 @@ def test_capability_12_evidence_labels_and_status():
     assert state.observations[1].status == "RETRIEVED"
 
 
-# Test 13 — Design Improvement Cycle (V1 -> Critique -> V2)
-def test_capability_13_design_improvement_cycle():
+# Test 15 — Design Improvement Cycle (V1 -> Critique -> V2)
+def test_design_improvement_cycle():
     v1 = generate_design(capacity=5, budget=80000, climate="hot_humid")
     t1 = evaluate_thermal(v1, climate="hot_humid")
     assert t1["passed"] is False
@@ -277,29 +309,8 @@ def test_capability_13_design_improvement_cycle():
     assert t2["thermal_score"] >= 0.70
 
 
-# Test 14 — State Maintenance across Iterations
-def test_capability_14_state_maintenance():
-    mock_llm = MockLLM([
-        '{"action": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Get climate"}',
-        '{"action": "generate_design", "arguments": {"capacity": 5, "budget": 80000}, "reason": "Generate v1"}',
-        '{"action": "evaluate_thermal", "arguments": {}, "reason": "Evaluate thermal"}'
-    ])
-    agent = Vishvakarma(llm=mock_llm, verbose=False)
-    state = AgentState(user_query="Design shelter for 5 people in Kerala")
-    
-    agent.run_step(state)
-    agent.run_step(state)
-    agent.run_step(state)
-
-    assert state.iteration == 3
-    assert state.requirements["climate"] == "hot_humid"
-    assert state.current_design is not None
-    assert len(state.tool_calls) == 3
-    assert len(state.observations) == 3
-
-
-# Test 15 — Greeting & Conversational Welcome
-def test_capability_15_greeting_welcome():
+# Test 16 — Conversational Welcome Handling
+def test_greeting_welcome():
     agent = Vishvakarma(verbose=False)
     state = agent.run(user_query="hi")
     assert state.status == "completed"

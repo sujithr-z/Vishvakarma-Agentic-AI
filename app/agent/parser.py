@@ -1,78 +1,80 @@
-"""Decision Parser for extracting structured actions from Qwen 1.8B."""
+"""Strict 2-Type Decision Parser (TOOL vs FINAL) for Qwen 1.8B."""
 import re
 import json
-from typing import Any, Dict, Optional
-from pydantic import BaseModel, Field, ValidationError
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field, model_validator, ValidationError
 
-
-class AgentDecision(BaseModel):
-    """Structured decision returned by the agent reasoning step."""
-    action: str = Field(..., description="The chosen tool action, answer, or finish")
-    arguments: Dict[str, Any] = Field(default_factory=dict, description="Arguments for the selected tool")
-    reason: str = Field(default="", description="Reasoning behind this action selection")
-
-
-KNOWN_ACTIONS = [
+AVAILABLE_REGISTERED_TOOLS = [
     "get_climate",
     "search_knowledge",
     "generate_design",
-    "evaluate_cost",
     "evaluate_thermal",
+    "evaluate_cost",
     "evaluate_structure",
     "modify_design",
     "analyze_thermal_constraints",
     "calculate_improvement_cost",
     "save_experience",
-    "retrieve_experience",
-    "answer",
-    "finish"
+    "retrieve_experience"
 ]
 
-ACTION_ALIASES = {
-    "modify_esign": "modify_design",
-    "redesign": "modify_design",
-    "update_design": "modify_design",
-    "create_design": "generate_design",
-    "get_weather": "get_climate",
-    "eval_thermal": "evaluate_thermal",
-    "eval_cost": "evaluate_cost",
-    "eval_structure": "evaluate_structure",
-    "analyze_constraints": "analyze_thermal_constraints",
-    "thermal_constraints": "analyze_thermal_constraints",
-    "improvement_cost": "calculate_improvement_cost",
-    "calculate_cost_impact": "calculate_improvement_cost",
-    "store_experience": "save_experience",
-    "done": "finish",
-    "complete": "finish",
-}
 
+class AgentDecision(BaseModel):
+    """
+    Strict 2-Type Decision Model:
+    1. type="tool"  -> requires tool_name (from AVAILABLE_REGISTERED_TOOLS), arguments dict, reason
+    2. type="final" -> requires content string, reason (optional)
+    """
+    type: Literal["tool", "final"] = Field(..., description="Decision type: 'tool' or 'final'")
+    tool_name: Optional[str] = Field(default=None, description="Exact tool name if type='tool'")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="Tool arguments if type='tool'")
+    reason: str = Field(default="", description="One-sentence rationale")
+    content: Optional[str] = Field(default=None, description="Final response content if type='final'")
 
-def normalize_action(action_str: str) -> str:
-    """Normalize and alias-map action string exactly without aggressive fuzzy substring matching."""
-    clean = action_str.strip().lower()
-    if clean in KNOWN_ACTIONS:
-        return clean
-    if clean in ACTION_ALIASES:
-        return ACTION_ALIASES[clean]
-    return clean
+    @model_validator(mode="after")
+    def validate_type_fields(self):
+        if self.type == "tool":
+            if not self.tool_name or not isinstance(self.tool_name, str) or not self.tool_name.strip():
+                raise ValueError("Decision with type='tool' MUST provide a valid 'tool_name'.")
+            self.tool_name = self.tool_name.strip()
+            # Clean any quotes or formatting in tool_name
+            self.tool_name = re.sub(r'[\s<>"\'`]', '', self.tool_name)
+            self.content = None
+        elif self.type == "final":
+            if not self.content or not isinstance(self.content, str) or not self.content.strip():
+                raise ValueError("Decision with type='final' MUST provide non-empty 'content'.")
+            self.content = self.content.strip()
+            self.tool_name = None
+        return self
 
+    @property
+    def action(self) -> str:
+        """Backward compatibility helper mapping to tool_name or finish."""
+        if self.type == "final":
+            return "finish"
+        return self.tool_name or ""
 
 
 def extract_json_block(text: str) -> Optional[str]:
-    """Extract first valid JSON object string from raw model output."""
+    """Extract first valid JSON block from text."""
     if not text:
         return None
 
     text = text.strip()
 
-    # Case 1: Find first balanced { ... }
+    # Case 1: Markdown code fences
+    fence_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text, re.IGNORECASE)
+    if fence_match:
+        candidate = fence_match.group(1).strip()
+        if candidate.startswith("{") and candidate.endswith("}"):
+            return candidate
+
+    # Case 2: Balanced braces
     start_idx = text.find("{")
     if start_idx != -1:
         depth = 0
-        end_idx = -1
         in_string = False
         escape = False
-
         for i in range(start_idx, len(text)):
             c = text[i]
             if c == '"' and not escape:
@@ -86,152 +88,75 @@ def extract_json_block(text: str) -> Optional[str]:
                 elif c == '}':
                     depth -= 1
                     if depth == 0:
-                        end_idx = i
-                        break
+                        return text[start_idx:i+1]
             escape = False
-
-        if end_idx != -1:
-            return text[start_idx : end_idx + 1].strip()
-        elif depth > 0:
-            # Attempt repair on truncated JSON
-            truncated = text[start_idx:].strip()
-            if in_string:
-                truncated += '"'
-            truncated += "}" * depth
-            return truncated
-
-    # Fallback Case 2: Markdown code block ```json ... ```
-    code_block_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if code_block_match:
-        return code_block_match.group(1).strip()
 
     return None
 
 
-def sanitize_json_string(s: str) -> str:
-    """Fix common JSON quirks from small LLMs (comments, missing commas, trailing commas, duplicate colons, runaway repetition, single quotes)."""
-    # Detect and prune runaway repeating words/tokens (e.g. "_impact_impact_impact...")
-    s = re.sub(r'([a-zA-Z0-9_-]{2,30}?)(?:\1){4,}', r'\1', s)
-    # Strip line comments (# ... and // ...)
-    s = re.sub(r'#.*$', '', s, flags=re.MULTILINE)
-    s = re.sub(r'//.*$', '', s, flags=re.MULTILINE)
-    # Fix duplicate colons (e.g. "key": ": "val" or "key":: "val")
-    s = re.sub(r':\s*:\s*', ': ', s)
-    s = re.sub(r':\s*"\s*:\s*"', ': "', s)
-    # Fix missing commas between properties (e.g. } \n "reason" or "val" \n "key":)
-    s = re.sub(r'(\}|"|\d|true|false|null)\s*\n\s*("[a-zA-Z0-9_]+"\s*:)', r'\1,\n\2', s)
-    # Remove trailing commas before closing braces/brackets
-    s = re.sub(r",\s*([\}\]])", r"\1", s)
-    return s
-
-
 def parse_decision(raw_output: str) -> AgentDecision:
     """
-    Parse and validate raw LLM text into an AgentDecision.
-    
-    Args:
-        raw_output: Text generated by Qwen.
-        
-    Returns:
-        Validated AgentDecision instance.
-        
-    Raises:
-        ValueError: If no valid decision JSON could be parsed or validated.
+    Strictly parse raw model output into an AgentDecision.
+    Raises ValueError on invalid output without silent fallbacks.
     """
     if not raw_output or not raw_output.strip():
-        raise ValueError("Empty LLM output cannot be parsed into a decision.")
+        raise ValueError("Empty output received from model.")
 
     json_str = extract_json_block(raw_output)
     if not json_str:
-        # Check if the output is direct conversational text intended as an answer
-        clean_text = raw_output.strip()
-        if not clean_text.startswith("{"):
-            return AgentDecision(
-                action="answer",
-                arguments={"message": clean_text},
-                reason="Model provided natural language response directly."
-            )
-        raise ValueError(f"Could not locate JSON structure in output: {raw_output[:100]}...")
+        raise ValueError(f"Output does not contain a valid JSON object. Received: '{raw_output[:100]}...'")
 
-    # Attempt parsing JSON
-    data = None
     try:
         data = json.loads(json_str)
-    except json.JSONDecodeError:
-        # Try sanitizing
-        sanitized = sanitize_json_string(json_str)
-        try:
-            data = json.loads(sanitized)
-        except json.JSONDecodeError:
-            # Fallback for single-quote JSON
-            try:
-                import ast
-                evaluated = ast.literal_eval(json_str)
-                if isinstance(evaluated, dict):
-                    data = evaluated
-            except Exception:
-                pass
+    except Exception as err:
+        raise ValueError(f"JSON decode failed: {err}. Raw text: '{json_str[:100]}...'") from err
 
     if not isinstance(data, dict):
-        # Resilient regex fallback for extracting action even if arguments were malformed/truncated
-        act_match = re.search(r'"(?:action|tool|tool_name)"\s*:\s*"([^"]+)"', raw_output, re.IGNORECASE)
-        if act_match:
-            extracted_action = normalize_action(act_match.group(1))
-            reason_match = re.search(r'"(?:reason|reasoning|explanation)"\s*:\s*"([^"]+)"', raw_output, re.IGNORECASE)
-            extracted_reason = reason_match.group(1) if reason_match else "Extracted action via regex fallback parser."
-            return AgentDecision(
-                action=extracted_action,
-                arguments={},
-                reason=extracted_reason
-            )
-        raise ValueError(f"Failed to parse JSON decision from string '{json_str[:120]}...'")
+        raise ValueError(f"Expected a JSON object (dict), got {type(data).__name__}.")
 
-    # Handle slight key name variations (e.g. "tool" instead of "action", "params" instead of "arguments")
-    # Handle explicit type="tool" or type="final"
-    msg_type = data.get("type", "").lower()
-    if msg_type == "final":
-        data["action"] = "answer"
-        content_val = data.get("content") or data.get("message") or data.get("summary") or ""
-        data["arguments"] = {"message": content_val}
-    elif msg_type == "tool":
-        if "tool_name" in data:
-            data["action"] = data.get("tool_name")
+    # Normalize keys for model friendliness
+    # 1. Type normalization
+    dec_type = data.get("type", "").strip().lower()
+    
+    # Handle legacy 'action' key if type wasn't explicitly provided
+    if not dec_type:
+        legacy_action = str(data.get("action", "")).strip().lower()
+        if legacy_action in ["final", "finish", "answer", "done", "complete"]:
+            dec_type = "final"
+        elif legacy_action in AVAILABLE_REGISTERED_TOOLS or "tool_name" in data:
+            dec_type = "tool"
+            if "tool_name" not in data and legacy_action:
+                data["tool_name"] = legacy_action
 
-    # Handle slight key name variations (e.g. "tool" instead of "action", "params" instead of "arguments")
-    if "action" not in data:
-        for alt in ["tool", "tool_name", "selected_tool", "command"]:
-            if alt in data:
-                data["action"] = data.pop(alt)
-                break
-
-    if "action" in data and isinstance(data["action"], str):
-        data["action"] = normalize_action(data["action"])
-
-    if "arguments" not in data:
-        for alt in ["args", "parameters", "params", "input", "inputs"]:
-            if alt in data:
-                data["arguments"] = data.pop(alt)
-                break
-        if "arguments" not in data:
-            if "content" in data and data.get("action") in ["answer", "finish"]:
-                data["arguments"] = {"message": data["content"]}
-            else:
-                data["arguments"] = {}
-
-    if "reason" not in data:
-        for alt in ["reasoning", "explanation", "thought", "rationale"]:
-            if alt in data:
-                data["reason"] = data.pop(alt)
-                break
-        if "reason" not in data:
-            data["reason"] = ""
+    if dec_type in ["tool", "call_tool", "execute_tool"]:
+        data["type"] = "tool"
+        if "tool_name" not in data:
+            if "action" in data:
+                data["tool_name"] = str(data["action"]).strip()
+            elif "tool" in data:
+                data["tool_name"] = str(data["tool"]).strip()
+    elif dec_type in ["final", "answer", "finish", "response", "message"]:
+        data["type"] = "final"
+        if "content" not in data:
+            for alt in ["message", "summary", "text", "response", "answer"]:
+                if alt in data and data[alt]:
+                    data["content"] = str(data[alt]).strip()
+                    break
+            if "arguments" in data and isinstance(data["arguments"], dict):
+                msg_in_args = data["arguments"].get("message") or data["arguments"].get("summary") or data["arguments"].get("content")
+                if msg_in_args:
+                    data["content"] = str(msg_in_args).strip()
 
     # Ensure arguments is a dict
-    if not isinstance(data["arguments"], dict):
-        data["arguments"] = {"value": data["arguments"]}
+    if "arguments" not in data or not isinstance(data["arguments"], dict):
+        if "args" in data and isinstance(data["args"], dict):
+            data["arguments"] = data["args"]
+        elif "parameters" in data and isinstance(data["parameters"], dict):
+            data["arguments"] = data["parameters"]
+        else:
+            data["arguments"] = {}
 
     try:
         return AgentDecision(**data)
-    except ValidationError as e:
-        raise ValueError(f"Decision failed Pydantic validation: {e}") from e
-
+    except ValidationError as val_err:
+        raise ValueError(f"Decision schema validation failed: {val_err}") from val_err
