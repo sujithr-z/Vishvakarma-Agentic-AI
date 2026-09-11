@@ -1,4 +1,4 @@
-"""Agent Controller orchestrating the LLM reasoning, deterministic tools, and PostgreSQL situation memory."""
+"""Agent Controller orchestrating genuine LLM Observe -> Reason -> Act loop, deterministic tools, and PostgreSQL situation memory."""
 import re
 import sys
 import json
@@ -83,7 +83,10 @@ def extract_initial_requirements(query: str) -> Dict[str, Any]:
 
 
 class Vishvakarma:
-    """The central agent orchestrator controlling Qwen 1.8B reasoning, PostgreSQL experience memory, and deterministic tool actions."""
+    """
+    The central agent orchestrator implementing an autonomous Observe -> Reason -> Act loop.
+    Python serves as the execution environment; Qwen 1.8B serves as the reasoning brain.
+    """
 
     def __init__(
         self,
@@ -104,13 +107,13 @@ class Vishvakarma:
         prefix = f"[{tag}]"
         safe_msg = message.encode("ascii", errors="backslashreplace").decode("ascii") if sys.platform == "win32" and not sys.stdout.encoding.lower().startswith("utf") else message
         try:
-            print(f"{prefix:10} {message}")
+            print(f"{prefix:12} {message}")
         except UnicodeEncodeError:
-            print(f"{prefix:10} {safe_msg}")
+            print(f"{prefix:12} {safe_msg}")
 
     def execute_action(self, action: str, args: Dict[str, Any], state: AgentState) -> Any:
         """
-        Execute deterministic tool call with state context injection and PostgreSQL versioning.
+        Execute deterministic tool call with contextual parameter fallback from state.
         """
         args_with_context = dict(args)
 
@@ -123,6 +126,10 @@ class Vishvakarma:
                 args_with_context["climate"] = state.requirements["climate"]
             if "building_type" not in args_with_context and "building_type" in state.requirements:
                 args_with_context["building_type"] = state.requirements["building_type"]
+
+        elif action in ["get_climate"]:
+            if "location" not in args_with_context and "location" in state.requirements:
+                args_with_context["location"] = state.requirements["location"]
 
         elif action in ["evaluate_cost"]:
             if "design" not in args_with_context and state.current_design:
@@ -185,7 +192,11 @@ class Vishvakarma:
 
     def run_step(self, state: AgentState) -> AgentDecision:
         """
-        Execute a single reasoning step: State -> LLM Prompt -> Decision JSON -> Tool Execution -> PostgreSQL Step Log -> Updated State.
+        Execute a single Observe -> Reason -> Act step:
+        1. Contextual Prompt (State + Observations) -> Qwen 1.8B
+        2. Qwen decides next action autonomously
+        3. Python Environment executes action & records Labeled Observation
+        4. State updated for next reasoning step
         """
         state.iteration += 1
         run_id = getattr(state, "run_id", self.active_run_id or f"run_{int(datetime.datetime.now().timestamp())}")
@@ -202,7 +213,7 @@ class Vishvakarma:
 
         # Check for greeting intent
         state.intent = detect_intent(state.user_query)
-        if state.intent == "greeting":
+        if state.intent == "greeting" and state.iteration == 1:
             welcome_msg = (
                 "Hello! I am Vishvakarma (Adaptive Shelter Agent) — an agentic AI assistant for climate-resilient, "
                 "low-cost modular shelter design and thermal comfort engineering.\n\n"
@@ -224,14 +235,16 @@ class Vishvakarma:
             )
             state.final_answer = welcome_msg
             state.status = "completed"
+            state.add_observation("agent", "COMPLETED", "Welcome greeting delivered.")
             self._log("ANSWER", welcome_msg)
             state.add_trace("AGENT", "Welcome Greeting", {"message": welcome_msg})
             return decision
 
-        # 2. Construct Prompt for Qwen
+        # 2. Build Context for LLM (OBSERVE)
         user_prompt = build_planner_prompt(state)
 
-        # 3. Call Qwen 1.8B via Ollama
+        # 3. Call LLM for Autonomous Decision (REASON)
+        decision: Optional[AgentDecision] = None
         try:
             raw_response = self.llm.generate(
                 prompt=user_prompt,
@@ -240,56 +253,31 @@ class Vishvakarma:
             )
             decision = parse_decision(raw_response)
         except Exception as e:
-            self._log("PARSER", f"JSON parse warning: {e}. Applying workflow fallback...")
-            # Fallback action determination based on state
-            if state.intent == "thermal_analysis":
-                if not state.requirements.get("climate_data"):
-                    fallback_act = "get_climate"
-                    fallback_args = {"location": state.requirements.get("location", "Kerala")}
-                elif not state.structured_analysis and not state.constraints:
-                    fallback_act = "analyze_thermal_constraints"
-                    fallback_args = {"location": state.requirements.get("location", "Kerala")}
-                elif not state.cost_impact:
-                    fallback_act = "calculate_improvement_cost"
-                    fallback_args = {}
-                else:
-                    fallback_act = "finish"
-                    fallback_args = {"summary": "Thermal constraint analysis and improvement cost calculation complete."}
-            else:
-                if not state.requirements.get("climate_data"):
-                    fallback_act = "get_climate"
-                    fallback_args = {"location": state.requirements.get("location", "Kerala")}
-                elif not state.current_design:
-                    fallback_act = "generate_design"
-                    fallback_args = {"capacity": state.requirements.get("capacity", 5), "budget": state.requirements.get("budget", 80000)}
-                elif not (state.evaluation and "thermal" in state.evaluation):
-                    fallback_act = "evaluate_thermal"
-                    fallback_args = {}
-                elif not state.evaluation.get("thermal", {}).get("passed", False) and len(state.design_history) < 2:
-                    fallback_act = "modify_design"
-                    fallback_args = {"critique": "Increase roof ventilation and overhang to pass 0.70 target"}
-                elif not (state.evaluation and "cost" in state.evaluation):
-                    fallback_act = "evaluate_cost"
-                    fallback_args = {}
-                elif not (state.evaluation and "structure" in state.evaluation):
-                    fallback_act = "evaluate_structure"
-                    fallback_args = {}
-                else:
-                    fallback_act = "finish"
-                    fallback_args = {"summary": "Shelter design generation completed."}
-            
+            # When parsing fails, do NOT substitute a hardcoded tool. Return observation to Qwen!
+            err_msg = f"Failed to parse decision JSON from model output: {e}"
+            self._log("PARSER_ERROR", err_msg)
+            state.add_observation(
+                source="environment",
+                status="INVALID_ACTION",
+                content=f"Your previous output was not valid JSON ({e}). Please return a single JSON object specifying action, arguments, and reason. Available tools: {list(TOOLS.keys())} + finish, answer."
+            )
             decision = AgentDecision(
-                action=fallback_act,
-                arguments=fallback_args,
-                reason=f"Recovered workflow action after parse notice: {fallback_act}"
+                action="invalid_syntax",
+                arguments={},
+                reason="Invalid JSON syntax from model."
             )
 
-        state.tool_calls.append({"iteration": state.iteration, "action": decision.action, "arguments": decision.arguments, "reason": decision.reason})
-        self._log("AGENT", f"Action: {decision.action} | Reason: {decision.reason}")
+        state.tool_calls.append({
+            "iteration": state.iteration,
+            "action": decision.action,
+            "arguments": decision.arguments,
+            "reason": decision.reason
+        })
+        self._log("QWEN DECISION", f"Action: {decision.action} | Reason: {decision.reason}")
         state.add_trace("AGENT", f"Action: {decision.action} ({decision.reason})", decision.model_dump())
 
-        # 4. Handle Terminal Decisions
-        if decision.action == "finish":
+        # 4. Handle Terminal Decisions (finish / answer)
+        if decision.action in ["finish", "answer"]:
             if state.intent == "thermal_analysis" and state.structured_analysis:
                 from app.agent.formatter import format_technical_thermal_analysis
                 formatted_summary = format_technical_thermal_analysis(
@@ -301,11 +289,16 @@ class Vishvakarma:
                 state.final_answer = formatted_summary
                 self._log("FINISH", "Thermal analysis technical report generated.")
             else:
-                summary = decision.arguments.get("summary", "Modular shelter design successfully completed and verified.")
+                summary = (
+                    decision.arguments.get("message")
+                    or decision.arguments.get("summary")
+                    or "Task completed successfully based on accumulated evidence."
+                )
                 state.final_answer = summary
                 self._log("FINISH", summary)
 
             state.status = "completed"
+            state.add_observation("agent", "COMPLETED", f"Task finalized: {state.final_answer[:120]}...")
             state.add_trace("AGENT", "Task Completed", {"summary": state.final_answer})
 
             # Save step to PostgreSQL
@@ -326,219 +319,210 @@ class Vishvakarma:
 
             return decision
 
-        if decision.action == "answer":
-            msg = decision.arguments.get("message", "Task completed.")
-            state.final_answer = msg
-            state.status = "completed"
-            self._log("ANSWER", msg)
-            state.add_trace("AGENT", "Direct Answer", {"message": msg})
+        # 5. Handle Invalid / Unregistered Action Names (Do not silently replace!)
+        if decision.action not in TOOLS:
+            if decision.action != "invalid_syntax":
+                obs_content = f"Requested tool '{decision.action}' does not exist. Available tools: {list(TOOLS.keys())} + finish, answer. Please reason and select an available tool or finish."
+                self._log("ENV_NOTICE", obs_content)
+                state.add_observation(source="environment", status="INVALID_ACTION", content=obs_content)
+            return decision
+
+        # 6. Execute Deterministic Tool (ACT & OBSERVE)
+        result = None
+        try:
+            result = self.execute_action(decision.action, decision.arguments, state)
+            state.tool_results.append(result)
+        except Exception as tool_err:
+            err_str = str(tool_err)
+            self._log("TOOL_ERROR", f"Error in {decision.action}: {err_str}")
+            state.add_observation(
+                source=decision.action,
+                status="TOOL_ERROR",
+                content=f"Tool '{decision.action}' execution failed with error: {err_str}. You must decide what to do next (e.g. try another tool, search knowledge, or answer with existing evidence)."
+            )
+            state.add_trace("TOOL", f"Tool Failure ({decision.action})", {"error": err_str})
+            return decision
+
+        # 7. Process Tool Output & Record Labeled Observations
+        if decision.action == "get_climate":
+            if isinstance(result, dict) and result.get("success", True):
+                state.requirements["climate"] = result.get("climate", state.requirements.get("climate", "hot_humid"))
+                state.requirements["climate_data"] = result
+                obs_text = f"Location: {result.get('location')}, Climate Zone: {result.get('climate')}, Temp: {result.get('temperature')}°C, RH: {result.get('humidity')}%, Wind: {result.get('wind_speed')} m/s, Trm: {result.get('trm')}°C"
+                state.add_observation(source="climate_tool", status="OBSERVED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+                state.add_trace("TOOL", f"Retrieved climate for {result.get('location')}", result)
+
+                try:
+                    save_climate_observation(
+                        obs_id=f"obs_{run_id}_{state.iteration}",
+                        agent_run_id=run_id,
+                        location=result.get("location", "Unknown"),
+                        climate_zone=result.get("climate", "hot_humid"),
+                        temperature_c=result.get("temperature"),
+                        rh_percent=result.get("humidity"),
+                        wind_speed_ms=result.get("wind_speed"),
+                        solar_radiation_w_m2=result.get("solar_radiation"),
+                        trm_c=result.get("trm")
+                    )
+                except Exception:
+                    pass
+            else:
+                err_text = result.get("error", "Unknown climate error") if isinstance(result, dict) else "Climate service unavailable"
+                obs_text = f"Climate lookup failed: {err_text}. Available alternatives: search_knowledge. You must decide what to do next."
+                state.add_observation(source="climate_tool", status="TOOL_ERROR", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+                state.add_trace("TOOL", f"Climate Tool Failure: {err_text}", result)
+
+        elif decision.action == "analyze_thermal_constraints":
+            state.structured_analysis = result
+            state.constraints = result.get("thermal_constraints", result.get("analysis", {}).get("thermal_constraints", []))
+            state.suggestions = result.get("suggestions", [])
+            state.improvements = result.get("improvements", [])
+            constraint_names = [c.get("constraint_id", "") + " (" + c.get("name", "") + ")" for c in state.constraints]
+            obs_text = f"Identified {len(state.constraints)} thermal constraints at risk: {', '.join(constraint_names[:3])}"
+            state.add_observation(source="constraint_engine", status="INFERRED", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", f"Thermal constraint analysis ({len(state.constraints)} at risk)", result)
 
             try:
-                save_agent_step(
-                    step_id=f"{run_id}_s_{state.iteration}",
+                save_thermal_analysis(
+                    analysis_id=f"ta_{run_id}_{state.iteration}",
                     agent_run_id=run_id,
-                    step_number=state.iteration,
-                    decision=decision.model_dump(),
-                    state_before=state_before,
-                    tool_called=decision.action,
-                    tool_arguments=decision.arguments,
-                    tool_result={"message": msg},
-                    state_after={"iteration": state.iteration, "status": state.status}
+                    indoor_temp_c=result.get("metrics", {}).get("indoor_operative_temp_c", 34.2),
+                    neutral_temp_c=result.get("metrics", {}).get("neutral_temp_c", 29.57),
+                    upper_90_limit=result.get("metrics", {}).get("upper_90_limit", 31.95),
+                    comfort_score=0.55,
+                    passed=False,
+                    constraints=state.constraints
                 )
             except Exception:
                 pass
 
-            return decision
+        elif decision.action == "calculate_improvement_cost":
+            state.cost_impact = result
+            obs_text = f"Total improvement cost: {result.get('formatted_total', 'INR 3,200.00')} (TARU-2015 2014 INR base). Items: {', '.join([it.get('description', '') for it in result.get('items', [])])}"
+            state.add_observation(source="cost_tool", status="CALCULATED", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", "Improvement cost calculated", result)
 
-        # 5. Handle Deterministic Tool Actions
-        result = None
-        if decision.action in TOOLS:
             try:
-                result = self.execute_action(decision.action, decision.arguments, state)
-                state.tool_results.append(result)
+                save_cost_result(
+                    cost_id=f"cost_{run_id}_{state.iteration}",
+                    agent_run_id=run_id,
+                    total_cost_inr=result.get("total_inr", 3200.0),
+                    itemized=result.get("items", []),
+                    is_historical=True,
+                    cost_year=2014,
+                    notes=result.get("notes")
+                )
+            except Exception:
+                pass
 
-                # State Updates per Tool Type
-                if decision.action == "get_climate":
-                    if isinstance(result, dict) and result.get("success", True):
-                        state.requirements["climate"] = result.get("climate", state.requirements.get("climate", "hot_humid"))
-                        state.requirements["climate_data"] = result
-                        self._log("TOOL", f"Climate retrieved: {result.get('location')} -> {result.get('climate')}")
-                        state.add_trace("TOOL", f"Retrieved climate for {result.get('location')}", result)
+        elif decision.action == "search_knowledge":
+            if isinstance(result, list):
+                state.retrieved_knowledge.extend(result)
+                topics = [r.get("title", r.get("topic", "Principle")) for r in result]
+                obs_text = f"Retrieved {len(result)} engineering principles: {', '.join(topics)}"
+                state.add_observation(source="knowledge_base", status="RETRIEVED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+                state.add_trace("RAG", f"Knowledge retrieved: {', '.join(topics)}", result)
 
-                        # Save climate observation to PostgreSQL
-                        try:
-                            save_climate_observation(
-                                obs_id=f"obs_{run_id}_{state.iteration}",
-                                agent_run_id=run_id,
-                                location=result.get("location", "Unknown"),
-                                climate_zone=result.get("climate", "hot_humid"),
-                                temperature_c=result.get("temperature"),
-                                rh_percent=result.get("humidity"),
-                                wind_speed_ms=result.get("wind_speed"),
-                                solar_radiation_w_m2=result.get("solar_radiation"),
-                                trm_c=result.get("trm")
-                            )
-                        except Exception:
-                            pass
-                    else:
-                        self._log("TOOL", f"Tool Failure: {result.get('error', 'Unknown climate error')}")
-                        state.add_trace("TOOL", f"Climate Tool Failure: {result.get('error')}", result)
+        elif decision.action == "generate_design":
+            state.current_design = result
+            state.design_history.append(result)
+            obs_text = f"Generated {result.get('name')} (v{result.get('version')}), Capacity: {result.get('capacity')}P, Floor area: {result.get('dimensions', {}).get('floor_area_sqm')} m², Openings: {result.get('openings', {}).get('opening_to_floor_ratio', 0.20)*100:.0f}%, Roof vent: {'Yes' if result.get('roof', {}).get('ventilation') else 'No'}"
+            state.add_observation(source="shelter_generator", status="CALCULATED", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", f"Generated initial modular design {result.get('name')}", result)
 
-                elif decision.action in ["analyze_thermal_constraints", "evaluate_thermal"] and state.intent == "thermal_analysis":
-                    from app.tools.constraints import analyze_thermal_constraints
-                    c_res = analyze_thermal_constraints(
-                        design=state.current_design,
-                        climate_data=state.requirements.get("climate_data"),
-                        location=state.requirements.get("location", "Kerala")
-                    )
-                    state.structured_analysis = c_res
-                    state.constraints = c_res.get("thermal_constraints", c_res.get("analysis", {}).get("thermal_constraints", []))
-                    state.suggestions = c_res.get("suggestions", [])
-                    state.improvements = c_res.get("improvements", [])
-                    self._log("TOOL", f"Constraint analysis complete: {len(state.constraints)} thermal constraints at risk identified.")
-                    state.add_trace("TOOL", f"Thermal constraint analysis complete ({len(state.constraints)} at risk)", c_res)
+            try:
+                save_building(
+                    building_id=b_id,
+                    name=result.get("name", "Modular-Aid-Shelter-v1"),
+                    climate_zone=state.requirements.get("climate", "hot_humid"),
+                    building_type=result.get("building_type", "modular_shelter"),
+                    geometry=result.get("geometry", {})
+                )
+                save_design_version(
+                    version_id=f"dv_{b_id}_v1",
+                    building_id=b_id,
+                    version_number=1,
+                    parameters=result
+                )
+            except Exception:
+                pass
 
-                    # Save thermal analysis & constraints to PostgreSQL
-                    try:
-                        save_thermal_analysis(
-                            analysis_id=f"ta_{run_id}_{state.iteration}",
-                            agent_run_id=run_id,
-                            indoor_temp_c=c_res.get("metrics", {}).get("indoor_operative_temp_c", 34.2),
-                            neutral_temp_c=c_res.get("metrics", {}).get("neutral_temp_c", 29.57),
-                            upper_90_limit=c_res.get("metrics", {}).get("upper_90_limit", 31.95),
-                            comfort_score=0.55,
-                            passed=False,
-                            constraints=state.constraints
-                        )
-                    except Exception:
-                        pass
+        elif decision.action == "modify_design":
+            state.current_design = result
+            state.design_history.append(result)
+            v_num = result.get("version", 2)
+            mods = ", ".join(result.get("modifications_applied", ["Updated parameters"]))
+            obs_text = f"Adapted design to Version {v_num}: {mods}. Openings: {result.get('openings', {}).get('opening_to_floor_ratio')*100:.0f}%, Roof vent: {result.get('roof', {}).get('ventilation')}"
+            state.add_observation(source="shelter_modifier", status="CALCULATED", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", f"Modified modular design to v{v_num}", result)
+            state.evaluation = None
+            state.critique = None
 
-                elif decision.action in ["calculate_improvement_cost", "evaluate_cost"] and state.intent == "thermal_analysis":
-                    from app.tools.cost import calculate_improvement_cost
-                    cost_res = calculate_improvement_cost(
-                        improvements=state.improvements,
-                        design=state.current_design
-                    )
-                    state.cost_impact = cost_res
-                    self._log("TOOL", f"Improvement cost calculated: {cost_res.get('formatted_total', 'INR 3,200.00')} total additional cost.")
-                    state.add_trace("TOOL", "Improvement cost calculated", cost_res)
+            try:
+                save_design_version(
+                    version_id=f"dv_{b_id}_v{v_num}",
+                    building_id=b_id,
+                    version_number=v_num,
+                    parent_version_id=f"dv_{b_id}_v{v_num - 1}",
+                    parameters=result
+                )
+            except Exception:
+                pass
 
-                    # Save cost result to PostgreSQL
-                    try:
-                        save_cost_result(
-                            cost_id=f"cost_{run_id}_{state.iteration}",
-                            agent_run_id=run_id,
-                            total_cost_inr=cost_res.get("total_inr", 3200.0),
-                            itemized=cost_res.get("items", []),
-                            is_historical=True,
-                            cost_year=2014,
-                            notes=cost_res.get("notes")
-                        )
-                    except Exception:
-                        pass
+        elif decision.action in ["evaluate_cost", "evaluate_thermal", "evaluate_structure"]:
+            if not state.evaluation:
+                state.evaluation = {}
 
-                elif decision.action == "search_knowledge":
-                    if isinstance(result, list):
-                        state.retrieved_knowledge.extend(result)
-                        titles = ", ".join([r.get("title", r.get("topic", "")) for r in result])
-                        self._log("RAG", f"Retrieved {len(result)} items: {titles}")
-                        state.add_trace("RAG", f"Knowledge retrieved: {titles}", result)
+            if decision.action == "evaluate_cost":
+                state.evaluation["cost"] = result
+                obs_text = f"Cost evaluated: ₹{result.get('total_cost'):,.0f} (Passed: {result.get('passed')})"
+                state.add_observation(source="cost_evaluator", status="CALCULATED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+            elif decision.action == "evaluate_thermal":
+                state.evaluation["thermal"] = result
+                obs_text = f"Thermal comfort score: {result.get('thermal_score')} / 0.70 target. Status: {'PASSED' if result.get('passed') else 'FAILED'}. Est. operative temp: {result.get('estimated_indoor_temp')}°C vs 90% limit {result.get('upper_90_limit')}°C"
+                state.add_observation(source="thermal_evaluator", status="CALCULATED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+            elif decision.action == "evaluate_structure":
+                state.evaluation["structure"] = result
+                obs_text = f"Structural safety score: {result.get('structural_score')}. Status: {'PASSED' if result.get('passed') else 'FAILED'}"
+                state.add_observation(source="structure_evaluator", status="CALCULATED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
 
-                elif decision.action == "generate_design":
-                    state.current_design = result
-                    state.design_history.append(result)
-                    self._log("TOOL", f"Modular design generated: {result.get('name')} (Version {result.get('version')})")
-                    state.add_trace("TOOL", f"Generated initial modular design {result.get('name')}", result)
+            state.add_trace("TOOL", f"Evaluation completed for {decision.action}", result)
 
-                    # Save building and immutable V1 design version in PostgreSQL
-                    try:
-                        save_building(
-                            building_id=b_id,
-                            name=result.get("name", "Modular-Aid-Shelter-v1"),
-                            climate_zone=state.requirements.get("climate", "hot_humid"),
-                            building_type=result.get("building_type", "modular_shelter"),
-                            geometry=result.get("geometry", {})
-                        )
-                        save_design_version(
-                            version_id=f"dv_{b_id}_v1",
-                            building_id=b_id,
-                            version_number=1,
-                            parameters=result
-                        )
-                    except Exception:
-                        pass
+            if "thermal" in state.evaluation and "cost" in state.evaluation and "structure" in state.evaluation:
+                state.critique = critique(state.evaluation)
+                state.evaluation["passed"] = state.critique["all_passed"]
+                critique_summary = "; ".join(state.critique.get("problems", ["All benchmarks satisfied"]))
+                obs_text = f"Comprehensive critique: {'PASSED ALL' if state.critique['all_passed'] else 'ISSUES FOUND: ' + critique_summary}"
+                state.add_observation(source="critic_engine", status="INFERRED", content=obs_text, data=state.critique)
+                self._log("OBSERVATION", obs_text)
 
-                elif decision.action == "modify_design":
-                    state.current_design = result
-                    state.design_history.append(result)
-                    mods = ", ".join(result.get("modifications_applied", ["Updated parameters"]))
-                    v_num = result.get("version", 2)
-                    self._log("TOOL", f"Modular design modified to Version {v_num}: {mods}")
-                    state.add_trace("TOOL", f"Modified modular design to v{v_num}", result)
-                    state.evaluation = None
-                    state.critique = None
+        elif decision.action == "save_experience":
+            obs_text = f"Saved design experience episode '{result.get('experience_id', 'exp_live')}' into PostgreSQL long-term memory."
+            state.add_observation(source="postgres_memory", status="HISTORICAL", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", "Experience saved to PostgreSQL", result)
 
-                    # Save immutable V2+ design version in PostgreSQL (Never overwrites V1)
-                    try:
-                        save_design_version(
-                            version_id=f"dv_{b_id}_v{v_num}",
-                            building_id=b_id,
-                            version_number=v_num,
-                            parent_version_id=f"dv_{b_id}_v{v_num - 1}",
-                            parameters=result
-                        )
-                    except Exception:
-                        pass
+        elif decision.action == "retrieve_experience":
+            obs_text = f"Retrieved {len(result)} past design experiences from PostgreSQL memory."
+            state.add_observation(source="postgres_memory", status="HISTORICAL", content=obs_text, data=result)
+            self._log("OBSERVATION", obs_text)
+            state.add_trace("TOOL", "Retrieved experiences from PostgreSQL", result)
 
-                elif decision.action in ["evaluate_cost", "evaluate_thermal", "evaluate_structure"]:
-                    if not state.evaluation:
-                        state.evaluation = {}
-                    
-                    if decision.action == "evaluate_cost":
-                        state.evaluation["cost"] = result
-                        self._log("TOOL", f"Cost evaluated: INR {result.get('total_cost')} (Passed: {result.get('passed')})")
-                    elif decision.action == "evaluate_thermal":
-                        state.evaluation["thermal"] = result
-                        self._log("TOOL", f"Thermal evaluated: Score={result.get('thermal_score')} / Target={result.get('target')} (Passed: {result.get('passed')})")
-                    elif decision.action == "evaluate_structure":
-                        state.evaluation["structure"] = result
-                        self._log("TOOL", f"Structure evaluated: Score={result.get('structural_score')} (Passed: {result.get('passed')})")
-
-                    state.add_trace("TOOL", f"Evaluation completed for {decision.action}", result)
-
-                    if "thermal" in state.evaluation and "cost" in state.evaluation and "structure" in state.evaluation:
-                        state.critique = critique(state.evaluation)
-                        state.evaluation["passed"] = state.critique["all_passed"]
-                        if not state.critique["all_passed"]:
-                            self._log("CRITIC", f"Observation: {'; '.join(state.critique['problems'])}")
-                            state.add_trace("CRITIC", "Critic evaluation failed", state.critique)
-                        else:
-                            self._log("CRITIC", "Observation: All performance benchmarks passed!")
-                            state.add_trace("CRITIC", "Critic all benchmarks passed", state.critique)
-                    elif decision.action == "evaluate_thermal" and not result.get("passed"):
-                        self._log("OBSERVE", f"Thermal score {result.get('thermal_score')} < target {result.get('target')} -> Improvement required.")
-                        state.add_trace("CRITIC", f"Thermal failed ({result.get('thermal_score')} < {result.get('target')})", result)
-
-                elif decision.action == "save_experience":
-                    self._log("MEMORY", f"PostgreSQL Experience saved: {result.get('experience_id')}")
-                    state.add_trace("MEMORY", "Saved modular design experience", result)
-
-                elif decision.action == "retrieve_experience":
-                    self._log("MEMORY", f"Retrieved {len(result)} past experiences from PostgreSQL")
-                    state.add_trace("MEMORY", "Retrieved past experiences", result)
-
-            except Exception as e:
-                err_msg = f"Error executing tool '{decision.action}': {e}"
-                self._log("ERROR", err_msg)
-                state.tool_results.append({"success": False, "error": err_msg})
-                state.add_trace("TOOL", f"Tool Exception: {err_msg}", {"error": str(e)})
-
-        # Record step to PostgreSQL agent_steps
+        # 8. Save Step to PostgreSQL
         try:
             state_after = {
                 "iteration": state.iteration,
                 "status": state.status,
-                "has_design": bool(state.current_design),
                 "design_version": state.current_design.get("version") if state.current_design else None
             }
             save_agent_step(
@@ -559,7 +543,7 @@ class Vishvakarma:
 
     def run(self, user_query: str, max_iterations: Optional[int] = None) -> AgentState:
         """
-        Execute full autonomous agent loop with PostgreSQL run tracking and experience persistence.
+        Execute full autonomous agent Observe -> Reason -> Act loop.
         """
         limit = max_iterations or self.max_iterations
         reqs = extract_initial_requirements(user_query)
@@ -636,7 +620,7 @@ class Vishvakarma:
                 failure_reason=None if is_success else "Halted before full validation",
                 key_learnings=f"Completed {state.intent} for {state.requirements.get('location')} ({state.requirements.get('climate')})."
             )
-        except Exception as e:
+        except Exception:
             pass
 
         if self.verbose:

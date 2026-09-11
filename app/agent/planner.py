@@ -1,28 +1,40 @@
-"""Planner and Context Builder grounded in TERI-2021, TARU-2015 Knowledge Base, and PostgreSQL Experience Memory."""
+"""Planner and Context Builder providing state, observations, and tools for genuine LLM reasoning."""
 import json
 from typing import Any, Dict, List
 from app.agent.state import AgentState
 from app.tools.registry import TOOL_SCHEMAS
 from app.memory.repository import retrieve_relevant_experiences
 
-SYSTEM_PROMPT = """You are the reasoning component of an adaptive shelter-design and thermal-analysis agent.
-Your primary sources are:
-1. TERI-2021: Thermal Comfort Prescription for Cooling Dominated Indian Residential Buildings
-2. TARU-2015: Handbook on Achieving Thermal Comfort within Built Environment – Volume II
+SYSTEM_PROMPT = """You are Vishvakarma, an autonomous reasoning agent for climate-resilient modular shelter design and thermal comfort engineering in India.
+Your engineering foundations are:
+1. NBC 2016: National Building Code of India (Adaptive Thermal Comfort Equations)
+2. TERI-2021: Thermal Comfort Prescription for Cooling Dominated Indian Residential Buildings
+3. TARU-2015: Handbook on Achieving Thermal Comfort within Built Environment – Vol II
 
-STRICT RULES:
-1. Never invent missing measurements, engineering thresholds, or cost values.
-2. Every numerical threshold, equation, and recommendation is strictly traced to TERI-2021 or TARU-2015.
-3. For cool-roof interventions, use TARU-2015 measured ΔT ranges (2-4 °C) and 2014 INR costs. All monetary figures must be labelled '2014 INR - current prices NOT PROVIDED'.
-4. Prefer deterministic tools for all numerical calculations, equation evaluation, and cost arithmetic.
-5. You NEVER execute tools directly; you ONLY return a single valid JSON object specifying the next action.
+CRITICAL OPERATIONAL RULES:
+1. NO EVIDENCE -> NO CLAIM: Never invent measurements, environmental parameters, engineering thresholds, or cost figures. If a value is unknown, retrieve it with a tool, calculate it, or state that it is unavailable.
+2. YOU ARE THE BRAIN: Python is only your execution environment. You independently inspect what information you have, what is missing, and what action to take next.
+3. CONDITIONAL TOOL CALLING: Only invoke tools that are strictly necessary for the user's specific request. (e.g. For pure knowledge questions, search knowledge or answer; do not call climate/thermal tools unnecessarily).
+4. INTERPRET OBSERVATIONS: On each step, review previous observations and their source/status before making your next decision.
+5. HANDLE TOOL ERRORS & INVALID ACTIONS: If a tool fails or an action was invalid, inspect the error observation and choose an alternative or answer.
+6. COMPLETION: When you have sufficient evidence to answer or fulfill the request, choose action 'finish' or 'answer'.
 
-JSON OUTPUT FORMAT:
+DECISION OUTPUT FORMAT:
+Respond with ONLY a single valid JSON object.
+Format A (Tool invocation):
 ```json
 {
   "action": "<tool_name>",
-  "arguments": { ... },
-  "reason": "<one sentence explanation of why this step is taken>"
+  "arguments": { "<arg_name>": <value> },
+  "reason": "<one sentence explaining why this tool is needed given current evidence>"
+}
+```
+Format B (Final answer / Completion):
+```json
+{
+  "action": "answer",
+  "arguments": { "message": "<your technical answer or summary>" },
+  "reason": "<explanation of why evidence is sufficient to answer>"
 }
 ```
 """
@@ -38,15 +50,23 @@ def detect_intent(query: str) -> str:
     if re.match(greeting_pattern, q) or q in ["hi", "hello", "hey", "help", "who are you", "what can you do"]:
         return "greeting"
 
-    # 2. Thermal Analysis / Constraints
-    if any(k in q for k in ["thermal constraint", "constraints could it exceed", "analyze", "thermal behavior", "thermally weak", "what should i change", "how much will the improvement cost", "what happens if", "comfort"]):
+    # 2. Pure Knowledge Queries
+    if any(k in q for k in ["what is thermal comfort", "define thermal comfort", "explain nbc 2016", "what is teri", "explain adaptive comfort", "what is cool roof"]):
+        return "knowledge_query"
+
+    # 3. Simple Calculation / Cost Query
+    if any(k in q for k in ["calculate cost", "cost of", "how much will", "improvement cost", "cost impact"]) and not any(k in q for k in ["design a", "create a"]):
+        return "calculation_query"
+
+    # 4. Thermal Analysis / Diagnostic
+    if any(k in q for k in ["thermal constraint", "constraints could it exceed", "analyze", "thermal behavior", "thermally weak", "what should i change", "what happens if", "comfort"]):
         return "thermal_analysis"
 
-    # 3. Suitability check
+    # 5. Suitability check
     elif any(k in q for k in ["suitable", "suitability", "appropriate for"]):
         return "suitability_check"
 
-    # 4. Design generation
+    # 6. Design generation
     else:
         return "design_generation"
 
@@ -70,13 +90,86 @@ def format_retrieved_experiences(experiences: List[Dict[str, Any]]) -> str:
         climate = exp.get("climate_context", {}).get("climate", "Unknown")
         learnings = exp.get("key_learnings", "Tested design modifications.")
         status = "PASSED" if exp.get("success") else "FAILED"
-        lines.append(f"- Experience #{idx} [{loc} / {climate} - {status}]: {learnings}")
+        lines.append(f"- [SOURCE: postgres_memory | STATUS: HISTORICAL] Experience #{idx} [{loc} / {climate} - {status}]: {learnings}")
+    return "\n".join(lines)
+
+
+def format_observations(state: AgentState) -> str:
+    """Format labeled chronological observations for Qwen."""
+    if not state.observations:
+        return "None yet (Initial Reasoning Step)."
+    
+    lines = []
+    for obs in state.observations:
+        lines.append(f"- [Step {obs.step}] [SOURCE: {obs.source} | STATUS: {obs.status}] {obs.content}")
+    return "\n".join(lines)
+
+
+def build_state_summary(state: AgentState) -> str:
+    """Build a concise, objective summary of what is known vs missing without prescribing actions."""
+    lines = []
+    
+    # Building State
+    if state.current_design:
+        d = state.current_design
+        lines.append(f"- Building Design: AVAILABLE ({d.get('name', 'Modular-Shelter')} v{d.get('version', 1)}, Capacity: {d.get('capacity', 5)} occupants, Budget: ₹{d.get('budget', 80000):,.0f}, Floor: {d.get('dimensions', {}).get('floor_area_sqm', 24)} m², Wall Opening: {d.get('openings', {}).get('opening_to_floor_ratio', 0.20)*100:.0f}%, Roof Vent: {'Yes' if d.get('roof', {}).get('ventilation') else 'No'})")
+    else:
+        lines.append("- Building Design: MISSING / NOT YET GENERATED")
+
+    # Climate State
+    if state.requirements.get("climate_data"):
+        c = state.requirements["climate_data"]
+        lines.append(f"- Environmental Climate: AVAILABLE (Location: {c.get('location', 'Kerala')}, Zone: {c.get('climate', 'hot_humid')}, Temp: {c.get('temperature', 33.0)}°C, RH: {c.get('humidity', 82.0)}%, Wind: {c.get('wind_speed', 2.8)} m/s, Trm: {c.get('trm', 32.0)}°C)")
+    elif state.requirements.get("location"):
+        lines.append(f"- Environmental Climate: PENDING FETCH for '{state.requirements.get('location')}'")
+    else:
+        lines.append("- Environmental Climate: NOT YET RETRIEVED")
+
+    # Thermal Performance
+    if state.evaluation and "thermal" in state.evaluation:
+        t = state.evaluation["thermal"]
+        status_str = "PASSED" if t.get("passed") else "FAILED"
+        lines.append(f"- Thermal Evaluation: CALCULATED (Score: {t.get('thermal_score', 0.0):.2f} / Target 0.70, Status: {status_str}, Est. Indoor Temp: {t.get('estimated_indoor_temp', 'N/A')}°C)")
+    else:
+        lines.append("- Thermal Evaluation: NOT YET EVALUATED")
+
+    # Thermal Constraints
+    if state.constraints or state.structured_analysis:
+        n_c = len(state.constraints)
+        lines.append(f"- Thermal Constraints: ANALYZED ({n_c} constraints evaluated against NBC 2016 / TERI-2021)")
+    else:
+        lines.append("- Thermal Constraints: NOT YET ANALYZED")
+
+    # Cost / Improvement Analysis
+    if state.cost_impact:
+        ci = state.cost_impact
+        lines.append(f"- Improvement Cost: CALCULATED ({ci.get('formatted_total', 'INR 3,200.00')}, 2014 INR base)")
+    elif state.evaluation and "cost" in state.evaluation:
+        c_eval = state.evaluation["cost"]
+        lines.append(f"- Construction Cost: CALCULATED (Total: ₹{c_eval.get('total_cost', 0):,.0f}, Passed: {c_eval.get('passed', False)})")
+    else:
+        lines.append("- Cost / Improvement: NOT YET CALCULATED")
+
+    # Structural Safety
+    if state.evaluation and "structure" in state.evaluation:
+        s_eval = state.evaluation["structure"]
+        lines.append(f"- Structural Safety: CHECKED (Passed: {s_eval.get('passed', False)})")
+    else:
+        lines.append("- Structural Safety: NOT YET CHECKED")
+
+    # Retrieved Knowledge
+    if state.retrieved_knowledge:
+        topics = ", ".join([k.get("topic", k.get("title", "Topic")) for k in state.retrieved_knowledge[:3]])
+        lines.append(f"- Engineering Knowledge: RETRIEVED ({len(state.retrieved_knowledge)} items: {topics})")
+    else:
+        lines.append("- Engineering Knowledge: NOT SEARCHED")
+
     return "\n".join(lines)
 
 
 def build_planner_prompt(state: AgentState) -> str:
     """
-    Construct contextual prompt with intent checklist and PostgreSQL experience memory for Qwen 1.8B.
+    Construct contextual Observe -> Reason prompt for Qwen 1.8B without any hardcoded checklists.
     """
     intent = detect_intent(state.user_query)
     state.intent = intent
@@ -85,7 +178,7 @@ def build_planner_prompt(state: AgentState) -> str:
         welcome_msg = (
             "Hello! I am Vishvakarma (Adaptive Shelter Agent) — an agentic AI assistant for climate-resilient, "
             "low-cost modular shelter design and thermal comfort engineering.\n\n"
-            "I am grounded in Indian building standards:\n"
+            "I am strictly grounded in Indian building standards:\n"
             "• NBC 2016 (National Building Code of India - Adaptive Thermal Comfort Equations)\n"
             "• TERI-2021 (Thermal Comfort Prescription for Cooling Dominated Indian Residential Buildings)\n"
             "• TARU-2015 (Handbook on Achieving Thermal Comfort in Built Environments)\n\n"
@@ -96,7 +189,7 @@ def build_planner_prompt(state: AgentState) -> str:
             "4. 💰 Cost & Retrofit Impact: 'Calculate cool-roof and ventilation improvement costs.'\n\n"
             "How can I assist you with your shelter design or thermal analysis today?"
         )
-        return f"""### AGENT WORKFLOW STATUS (Step {state.iteration}) | Intent: GREETING:
+        return f"""### AGENT STATUS (Step {state.iteration}) | Intent: GREETING:
 User Query: "{state.user_query}"
 
 Respond with ONLY the JSON answer to welcome the user:
@@ -111,6 +204,8 @@ Respond with ONLY the JSON answer to welcome the user:
 ```"""
 
     tools_desc = format_tool_descriptions()
+    state_summary = build_state_summary(state)
+    obs_summary = format_observations(state)
 
     # Retrieve relevant experiences from PostgreSQL memory
     climate = state.requirements.get("climate", "hot_humid")
@@ -124,126 +219,36 @@ Respond with ONLY the JSON answer to welcome the user:
     )
     exp_summary = format_retrieved_experiences(relevant_exps)
 
-    has_climate = bool(state.requirements.get("climate_data"))
-    has_knowledge = bool(state.retrieved_knowledge)
-    has_design = bool(state.current_design)
-    has_constraints = bool(state.constraints or state.structured_analysis)
-    has_cost_impact = bool(state.cost_impact)
-    has_thermal = bool(state.evaluation and "thermal" in state.evaluation)
-    has_cost = bool(state.evaluation and "cost" in state.evaluation)
-    has_structure = bool(state.evaluation and "structure" in state.evaluation)
+    prompt = f"""================================================================================
+USER REQUEST:
+"{state.user_query}"
+================================================================================
 
-    thermal_passed = bool(has_thermal and state.evaluation["thermal"].get("passed", False))
-    cost_passed = bool(has_cost and state.evaluation["cost"].get("passed", False))
-    struct_passed = bool(has_structure and state.evaluation["structure"].get("passed", False))
+CURRENT SITUATION & STATE (Step {state.iteration}):
+{state_summary}
 
-    if intent == "thermal_analysis":
-        checklist = [
-            f"[{'X' if has_climate else ' '}] 1. Environmental Climate Context: {'FETCHED (' + state.requirements.get('climate', 'hot_humid') + ')' if has_climate else 'NOT YET FETCHED'}",
-            f"[{'X' if has_constraints else ' '}] 2. Thermal Constraint Analysis: {'ANALYZED (' + str(len(state.constraints)) + ' constraints checked against TERI-2021 / TARU-2015)' if has_constraints else 'PENDING'}",
-            f"[{'X' if has_cost_impact else ' '}] 3. Improvement Cost Calculation: {'CALCULATED (2014 INR)' if has_cost_impact else 'PENDING'}",
-            f"[{'X' if state.status == 'completed' else ' '}] 4. Technical Synthesis: {'READY' if (has_constraints and has_cost_impact) else 'PENDING'}"
-        ]
-        checklist_str = "\n".join(checklist)
-
-        if not has_climate:
-            next_action_name = "get_climate"
-            next_action_args = f'{{"location": "{state.requirements.get("location", "Kerala")}"}}'
-            next_reason = "Fetch environmental climate parameters for the location"
-        elif not has_constraints:
-            next_action_name = "analyze_thermal_constraints"
-            next_action_args = f'{{"location": "{state.requirements.get("location", "Kerala")}"}}'
-            next_reason = "Analyze shelter against NBC 2016 adaptive equations and TARU thresholds"
-        elif not has_cost_impact:
-            next_action_name = "calculate_improvement_cost"
-            next_action_args = '{}'
-            next_reason = "Calculate itemized cost impact for proposed cool-roof and ventilation interventions"
-        else:
-            next_action_name = "finish"
-            next_action_args = '{"summary": "Thermal constraint analysis and improvement cost calculation complete."}'
-            next_reason = "All thermal constraints and cost impacts calculated; deliver final technical report"
-
-    else:
-        # Full modular design generation / iterative loop
-        checklist = [
-            f"[{'X' if has_climate else ' '}] 1. Environmental Climate Data: {'RETRIEVED (' + state.requirements.get('climate', 'hot_humid') + ')' if has_climate else 'NOT YET FETCHED'}",
-            f"[{'X' if has_knowledge else ' '}] 2. Knowledge Principles: {'RETRIEVED' if has_knowledge else 'NOT YET SEARCHED'}",
-            f"[{'X' if has_design else ' '}] 3. Modular Shelter Design: {'GENERATED (Version ' + str(state.current_design.get('version', 1)) + ')' if has_design else 'NOT YET GENERATED'}",
-            f"[{'X' if has_thermal else ' '}] 4. Thermal Evaluation: {'PASSED (Score: ' + str(state.evaluation['thermal'].get('thermal_score')) + ')' if thermal_passed else ('FAILED (Score: ' + str(state.evaluation['thermal'].get('thermal_score')) + ' < 0.70)' if has_thermal else 'PENDING')}",
-            f"[{'X' if has_cost else ' '}] 5. Cost Evaluation: {'PASSED (INR ' + str(state.evaluation['cost'].get('total_cost')) + ')' if cost_passed else ('FAILED' if has_cost else 'PENDING')}",
-            f"[{'X' if has_structure else ' '}] 6. Structural Evaluation: {'PASSED' if struct_passed else ('FAILED' if has_structure else 'PENDING')}"
-        ]
-        checklist_str = "\n".join(checklist)
-
-        query_lower = state.user_query.lower()
-        is_direct_thermal = "thermal" in query_lower and ("performance" in query_lower or "score" in query_lower or "evaluate" in query_lower)
-
-        if is_direct_thermal and has_design:
-            next_action_name = "evaluate_thermal"
-            next_action_args = '{}'
-            next_reason = "User requested thermal evaluation of the shelter design"
-        elif not has_climate:
-            next_action_name = "get_climate"
-            next_action_args = f'{{"location": "{state.requirements.get("location", "Kerala")}"}}'
-            next_reason = "Fetch climate conditions for the target location"
-        elif not has_knowledge:
-            next_action_name = "search_knowledge"
-            next_action_args = '{"query": "hot humid roof ventilation principles"}'
-            next_reason = "Search engineering principles for hot-humid passive cooling"
-        elif not has_design:
-            next_action_name = "generate_design"
-            next_action_args = f'{{"capacity": {state.requirements.get("capacity", 5)}, "budget": {state.requirements.get("budget", 80000)}}}'
-            next_reason = "Generate initial Version 1 modular shelter design"
-        elif not has_thermal:
-            next_action_name = "evaluate_thermal"
-            next_action_args = '{}'
-            next_reason = "Evaluate thermal comfort score of the current modular design"
-        elif not thermal_passed:
-            next_action_name = "modify_design"
-            next_action_args = '{"critique": "Increase roof ventilation and overhang to pass 0.70 target"}'
-            next_reason = "Thermal score failed target; modify design to improve ventilation and shading"
-        elif not has_cost:
-            next_action_name = "evaluate_cost"
-            next_action_args = '{}'
-            next_reason = "Verify cost against budget"
-        elif not has_structure:
-            next_action_name = "evaluate_structure"
-            next_action_args = '{}'
-            next_reason = "Verify structural safety constraints"
-        else:
-            past_actions = [c.get("action") for c in state.tool_calls]
-            if "save_experience" not in past_actions:
-                next_action_name = "save_experience"
-                next_action_args = '{"key_learnings": "Applied high-SRI cool roof and increased roof ventilation to achieve comfort compliance."}'
-                next_reason = "Save successful design iteration to PostgreSQL experience memory"
-            else:
-                next_action_name = "finish"
-                next_action_args = f'{{"summary": "Successfully designed and validated {state.current_design.get("name")} (Version {state.current_design.get("version")}) passing thermal (0.78), cost (INR {state.evaluation["cost"].get("total_cost")}), and structural safety."}}'
-                next_reason = "All engineering benchmarks satisfied; complete the task"
-
-    prompt = f"""### AGENT WORKFLOW STATUS (Step {state.iteration}) | Intent: {intent.upper()}:
-User Query: "{state.user_query}"
+PREVIOUS OBSERVATIONS & EVIDENCE:
+{obs_summary}
 
 RELEVANT PREVIOUS EXPERIENCES (FROM POSTGRESQL MEMORY):
 {exp_summary}
-(Note: Use previous experience as supporting context; evaluate current building independently.)
-
-WORKFLOW CHECKLIST:
-{checklist_str}
 
 AVAILABLE TOOLS:
 {tools_desc}
 
-REQUIRED NEXT ACTION BASED ON STATE:
-Action: `{next_action_name}`
-Reason: {next_reason}
+DECIDE THE NEXT ACTION:
+Carefully inspect the USER REQUEST, CURRENT SITUATION, and PREVIOUS OBSERVATIONS.
+- If you need additional data or calculations to fulfill the user request, choose the appropriate tool and provide its arguments.
+- If you have sufficient evidence to complete the task or answer the question, select action 'finish' (or 'answer') and provide the final technical response.
+- Do NOT call unnecessary tools.
+- Strict Rule: NO EVIDENCE -> NO CLAIM. Never fabricate missing values.
 
-Respond with ONLY the JSON object for `{next_action_name}`:
+Respond with ONLY a single valid JSON object for your chosen action:
 ```json
 {{
-  "action": "{next_action_name}",
-  "arguments": {next_action_args},
-  "reason": "{next_reason}"
+  "action": "<tool_name or finish or answer>",
+  "arguments": {{ ... }},
+  "reason": "<why this action was chosen based on current evidence>"
 }}
 ```"""
     return prompt

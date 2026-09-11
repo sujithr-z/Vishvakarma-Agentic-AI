@@ -20,6 +20,8 @@ KNOWN_ACTIONS = [
     "evaluate_thermal",
     "evaluate_structure",
     "modify_design",
+    "analyze_thermal_constraints",
+    "calculate_improvement_cost",
     "save_experience",
     "retrieve_experience",
     "answer",
@@ -28,30 +30,17 @@ KNOWN_ACTIONS = [
 
 ACTION_ALIASES = {
     "modify_esign": "modify_design",
-    "modify": "modify_design",
     "redesign": "modify_design",
     "update_design": "modify_design",
-    "generate": "generate_design",
     "create_design": "generate_design",
-    "design": "generate_design",
-    "climate": "get_climate",
-    "weather": "get_climate",
     "get_weather": "get_climate",
-    "thermal": "evaluate_thermal",
     "eval_thermal": "evaluate_thermal",
-    "cost": "evaluate_cost",
     "eval_cost": "evaluate_cost",
-    "structure": "evaluate_structure",
     "eval_structure": "evaluate_structure",
     "analyze_constraints": "analyze_thermal_constraints",
     "thermal_constraints": "analyze_thermal_constraints",
-    "analyze_thermal": "analyze_thermal_constraints",
     "improvement_cost": "calculate_improvement_cost",
     "calculate_cost_impact": "calculate_improvement_cost",
-    "knowledge": "search_knowledge",
-    "search": "search_knowledge",
-    "rag": "search_knowledge",
-    "save": "save_experience",
     "store_experience": "save_experience",
     "done": "finish",
     "complete": "finish",
@@ -59,19 +48,14 @@ ACTION_ALIASES = {
 
 
 def normalize_action(action_str: str) -> str:
-    """Normalize and alias-map action string."""
+    """Normalize and alias-map action string exactly without aggressive fuzzy substring matching."""
     clean = action_str.strip().lower()
     if clean in KNOWN_ACTIONS:
         return clean
     if clean in ACTION_ALIASES:
         return ACTION_ALIASES[clean]
-    for k, v in ACTION_ALIASES.items():
-        if k in clean:
-            return v
-    for known in KNOWN_ACTIONS:
-        if known in clean:
-            return known
     return clean
+
 
 
 def extract_json_block(text: str) -> Optional[str]:
@@ -203,6 +187,17 @@ def parse_decision(raw_output: str) -> AgentDecision:
         raise ValueError(f"Failed to parse JSON decision from string '{json_str[:120]}...'")
 
     # Handle slight key name variations (e.g. "tool" instead of "action", "params" instead of "arguments")
+    # Handle explicit type="tool" or type="final"
+    msg_type = data.get("type", "").lower()
+    if msg_type == "final":
+        data["action"] = "answer"
+        content_val = data.get("content") or data.get("message") or data.get("summary") or ""
+        data["arguments"] = {"message": content_val}
+    elif msg_type == "tool":
+        if "tool_name" in data:
+            data["action"] = data.get("tool_name")
+
+    # Handle slight key name variations (e.g. "tool" instead of "action", "params" instead of "arguments")
     if "action" not in data:
         for alt in ["tool", "tool_name", "selected_tool", "command"]:
             if alt in data:
@@ -218,7 +213,10 @@ def parse_decision(raw_output: str) -> AgentDecision:
                 data["arguments"] = data.pop(alt)
                 break
         if "arguments" not in data:
-            data["arguments"] = {}
+            if "content" in data and data.get("action") in ["answer", "finish"]:
+                data["arguments"] = {"message": data["content"]}
+            else:
+                data["arguments"] = {}
 
     if "reason" not in data:
         for alt in ["reasoning", "explanation", "thought", "rationale"]:
@@ -236,3 +234,4 @@ def parse_decision(raw_output: str) -> AgentDecision:
         return AgentDecision(**data)
     except ValidationError as e:
         raise ValueError(f"Decision failed Pydantic validation: {e}") from e
+
