@@ -238,10 +238,10 @@ pytest tests/ -v
 ## 👥 Authors & Contributors
 
 - **Sujith R** ([@sujithr-z](https://github.com/sujithr-z))
-- **Abhiyukth Krishna** ([@abhiyukth-krishna](https://github.com/abhiyukth-krishna)) 
-- **Shamsuddin** ([@tricksterunknown](https://github.com/tricksterunknown)) 
+- **Abhiyukth Krishna T** ([@abhiyukth-krishna](https://github.com/abhiyukth-krishna)) 
+- **hasan** ([@tricksterunknown](https://github.com/tricksterunknown)) 
 - **Kamalapriyan** ([@MadScientist-Shadow](https://github.com/MadScientist-Shadow))
-- **Krishnapriya** ([@jewelnbule](https://github.com/jewelnbule)) 
+- **Krishnapriya** ([@jewelnblu](https://github.com/jewelnblu)) 
 
 ---
 
