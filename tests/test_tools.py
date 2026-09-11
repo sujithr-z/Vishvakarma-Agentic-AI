@@ -99,3 +99,27 @@ def test_memory_save_and_retrieve():
 
     retrieved = retrieve_experience(climate="hot_humid")
     assert len(retrieved) > 0
+
+
+def test_generate_analysis_plot_tool(tmp_path):
+    """Verify generate_analysis_plot tool executes against live AgentState and returns structured metrics."""
+    from app.visualization.dashboard import generate_analysis_plot
+    from app.agent.state import AgentState
+
+    d1 = generate_design(capacity=5, budget=80000, climate="hot_humid")
+    state = AgentState(
+        user_query="Plot thermal analysis",
+        current_design=d1,
+        requirements={"climate": "hot_humid", "location": "Kerala", "budget": 80000}
+    )
+    test_file = tmp_path / "plot_test.png"
+    res = generate_analysis_plot(state=state, plot_type="thermal_analysis", save_path=str(test_file))
+
+    assert res["status"] == "success"
+    assert res["data_source"] == "current_agent_state"
+    assert "metrics" in res
+    assert res["metrics"]["design_version"] == 1
+    assert res["metrics"]["outdoor_temp_c"] is not None
+    assert res["metrics"]["indoor_temp_c"] is not None
+    assert res["metrics"]["thermal_score"] is not None
+    assert (tmp_path / "plot_test.png").exists()

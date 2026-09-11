@@ -178,6 +178,10 @@ class Vishvakarma:
             if "design" not in args_with_context and state.current_design:
                 args_with_context["design"] = state.current_design
 
+        elif tool_name in ["generate_analysis_plot"]:
+            if "state" not in args_with_context:
+                args_with_context["state"] = state
+
         elif tool_name in ["save_experience"]:
             if "design" not in args_with_context and state.current_design:
                 args_with_context["design"] = state.current_design
@@ -512,6 +516,23 @@ class Vishvakarma:
                 obs_text = f"Comprehensive critique: {'PASSED ALL' if state.critique['all_passed'] else 'ISSUES FOUND: ' + critique_summary}"
                 state.add_observation(source="critic_engine", status="INFERRED", content=obs_text, data=state.critique)
                 self._log("OBSERVATION", obs_text)
+
+        elif tool_name == "generate_analysis_plot":
+            vis_type = result.get("visualization_type", "thermal_analysis") if isinstance(result, dict) else "thermal_analysis"
+            status = result.get("status", "success") if isinstance(result, dict) else "success"
+            if status == "success":
+                v_num = result.get("metrics", {}).get("design_version", 1)
+                f_path = result.get("file_path", "data/analysis_dashboard.png")
+                obs_text = f"Rendered live {vis_type} plot from current agent state (Design v{v_num}). Saved to: {f_path}"
+                state.add_observation(source="visualization_tool", status="CALCULATED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+                state.add_trace("TOOL", f"Generated analysis plot ({vis_type})", result)
+            else:
+                msg = result.get("message", "Unable to generate plot.") if isinstance(result, dict) else "Visualization unavailable"
+                obs_text = f"Visualization notice: {msg}"
+                state.add_observation(source="visualization_tool", status="OBSERVED", content=obs_text, data=result)
+                self._log("OBSERVATION", obs_text)
+                state.add_trace("TOOL", f"Visualization notice ({vis_type})", result)
 
         elif tool_name == "save_experience":
             obs_text = f"Saved design experience episode '{result.get('experience_id', 'exp_live')}' into PostgreSQL long-term memory."

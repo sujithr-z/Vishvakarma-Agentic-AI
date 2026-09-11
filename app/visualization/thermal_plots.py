@@ -12,7 +12,7 @@ import matplotlib.patches as mpatches
 def extract_thermal_metrics(state: Any) -> Dict[str, Any]:
     """
     Extract thermal, climate, and design history metrics from AgentState or dict.
-    Gracefully extracts real values with standard engineering defaults if absent.
+    Calculates live physics metrics deterministically from active current_design and state.
     """
     if hasattr(state, "model_dump"):
         data = state.model_dump()
@@ -28,30 +28,59 @@ def extract_thermal_metrics(state: Any) -> Dict[str, Any]:
     wind_speed = 2.5
     trm = 31.0
 
-    # Check tool_results or retrieved_knowledge for climate
-    tool_results = data.get("tool_results", [])
-    for tr in tool_results:
-        res = tr.get("result", {}) if isinstance(tr, dict) else {}
-        if isinstance(res, dict) and "temperature_c" in res:
-            outdoor_temp = float(res.get("temperature_c", outdoor_temp))
-            rh_percent = float(res.get("humidity_percent", rh_percent))
-            wind_speed = float(res.get("wind_speed_ms", wind_speed))
-            trm = float(res.get("trm_c", trm))
-            climate = str(res.get("climate", climate))
-            break
+    # 1. Check requirements or tool_results for live climate observations
+    reqs = data.get("requirements", {})
+    if "climate_data" in reqs and isinstance(reqs["climate_data"], dict):
+        cd = reqs["climate_data"]
+        outdoor_temp = float(cd.get("temperature", cd.get("temperature_c", outdoor_temp)))
+        rh_percent = float(cd.get("humidity", cd.get("humidity_percent", rh_percent)))
+        wind_speed = float(cd.get("wind_speed", cd.get("wind_speed_ms", wind_speed)))
+        trm = float(cd.get("trm", cd.get("trm_c", trm)))
+        climate = str(cd.get("climate", climate))
+    else:
+        tool_results = data.get("tool_results", [])
+        for tr in tool_results:
+            res = tr.get("result", {}) if isinstance(tr, dict) else {}
+            if isinstance(res, dict) and "temperature_c" in res:
+                outdoor_temp = float(res.get("temperature_c", outdoor_temp))
+                rh_percent = float(res.get("humidity_percent", rh_percent))
+                wind_speed = float(res.get("wind_speed_ms", wind_speed))
+                trm = float(res.get("trm_c", trm))
+                climate = str(res.get("climate", climate))
+                break
 
-    # Extract evaluation metrics
+    # 2. Extract active current_design parameters
+    curr_design = data.get("current_design") or {}
+    roof = curr_design.get("roof", {})
+    walls = curr_design.get("walls", {})
+    roof_vent = float(roof.get("ventilation", 0.5))
+    overhang = float(roof.get("overhang", 0.6))
+    opening_ratio = float(walls.get("opening_ratio", 0.25))
+
+    # 3. Extract evaluation metrics
     eval_data = data.get("evaluation") or {}
-    thermal_score = float(eval_data.get("thermal_score") or eval_data.get("score") or 0.58)
-    target_score = float(eval_data.get("target") or 0.70)
+    thermal_eval = eval_data.get("thermal") or eval_data
+    thermal_score = float(thermal_eval.get("thermal_score") or thermal_eval.get("score") or 0.58)
+    target_score = float(thermal_eval.get("target") or 0.70)
 
-    # Extract constraint analysis data
-    constraints = data.get("constraints") or []
+    # 4. Standard NBC 2016 Adaptive Thermal Thresholds
     upper_limit = round(0.54 * trm + 12.83 + 2.38, 2)
     neutral_temp = round(0.54 * trm + 12.83, 2)
-    indoor_temp = round(outdoor_temp + 3.0 - (0.25 * 3.0), 1)
-    indoor_air_speed = round(max(0.15, wind_speed * 0.25 * 0.4), 2)
 
+    # Deterministic live operative indoor temperature calculation based on current design
+    # Passive reduction: roof ventilation gives up to ~1.5°C cooling, overhang ~1.0°C, opening ratio ~2.5°C
+    if curr_design:
+        indoor_temp = round(outdoor_temp + 3.2 - (roof_vent * 1.5) - (overhang * 1.0) - (opening_ratio * 2.5), 1)
+        indoor_air_speed = round(max(0.15, wind_speed * opening_ratio * 1.2), 2)
+    else:
+        indoor_temp = round(outdoor_temp + 3.0 - (0.25 * 3.0), 1)
+        indoor_air_speed = round(max(0.15, wind_speed * 0.25 * 0.4), 2)
+
+    # Override if explicit constraint check or evaluated operative temp is recorded
+    if isinstance(thermal_eval, dict) and "estimated_indoor_temp" in thermal_eval:
+        indoor_temp = float(thermal_eval["estimated_indoor_temp"])
+
+    constraints = data.get("constraints") or []
     for c in constraints:
         if isinstance(c, dict):
             cid = c.get("constraint_id")
@@ -64,20 +93,28 @@ def extract_thermal_metrics(state: Any) -> Dict[str, Any]:
                 if isinstance(actual, (int, float)):
                     indoor_air_speed = float(actual)
 
-    # Extract design history for evolution
+    # 5. Extract design history for evolution
     design_history = data.get("design_history") or []
     versions: List[str] = []
     scores: List[float] = []
 
     if design_history:
         for idx, dh in enumerate(design_history):
-            v_name = dh.get("version") or f"V{idx+1}"
+            v_num = dh.get("version", idx + 1)
+            v_name = f"V{v_num}"
             v_score = dh.get("thermal_score")
-            if v_score is None and "evaluation" in dh:
+            if v_score is None and "evaluation" in dh and isinstance(dh["evaluation"], dict):
                 v_score = dh["evaluation"].get("thermal_score")
             if v_score is None:
-                # Estimate baseline or step
-                v_score = 0.58 if idx == 0 else (0.75 if idx == 1 else 0.82)
+                # Compute deterministic score directly from design parameters
+                r_v = float(dh.get("roof", {}).get("ventilation", 0.5))
+                r_o = float(dh.get("roof", {}).get("overhang", 0.6))
+                w_o = float(dh.get("walls", {}).get("opening_ratio", 0.25))
+                v_factor = min(1.0, r_v / 0.85)
+                o_factor = min(1.0, w_o / 0.38)
+                s_factor = min(1.0, r_o / 0.95)
+                raw_s = 0.40 * v_factor + 0.35 * o_factor + 0.25 * s_factor
+                v_score = round(raw_s * 0.88, 2)
             versions.append(str(v_name))
             scores.append(float(v_score))
     else:

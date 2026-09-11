@@ -54,27 +54,32 @@ def detect_intent(query: str) -> str:
         if not any(k in q for k in ["shelter", "thermal", "climate", "comfort", "teri", "taru", "nbc", "roof", "insulation", "cost"]):
             return "general_query"
 
-    # 3. Pure Knowledge Queries
+    # 3. Visualization / Graph Request
+    if any(k in q for k in ["graph", "plot", "dashboard", "visualize", "visualization", "show chart", "show figure", "show me the"]):
+        if any(k in q for k in ["graph", "plot", "dashboard", "visual", "figure", "chart"]):
+            return "visualization_request"
+
+    # 4. Pure Knowledge Queries
     if any(k in q for k in ["what is thermal comfort", "define thermal comfort", "explain nbc 2016", "what is teri", "explain adaptive comfort", "what is cool roof"]):
         return "knowledge_query"
 
-    # 4. Simple Calculation / Cost Query
+    # 5. Simple Calculation / Cost Query
     if any(k in q for k in ["calculate cost", "cost of", "how much will", "improvement cost", "cost impact"]) and not any(k in q for k in ["design a", "create a"]):
         return "calculation_query"
 
-    # 5. Thermal Analysis / Diagnostic
+    # 6. Thermal Analysis / Diagnostic
     if any(k in q for k in ["thermal constraint", "constraints could it exceed", "analyze", "thermal behavior", "thermally weak", "what should i change", "what happens if", "comfort"]):
         return "thermal_analysis"
 
-    # 6. Suitability check
+    # 7. Suitability check
     if any(k in q for k in ["suitable", "suitability", "appropriate for"]):
         return "suitability_check"
 
-    # 7. Design generation
+    # 8. Design generation
     if any(k in q for k in ["design", "shelter", "modular", "house", "building", "roof", "kerala", "assam", "rajasthan"]):
         return "design_generation"
 
-    # 8. General fallback for other queries
+    # 9. General fallback for other queries
     return "general_query"
 
 

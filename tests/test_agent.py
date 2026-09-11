@@ -317,3 +317,146 @@ def test_greeting_welcome():
     assert state.final_answer is not None
     assert "Vishvakarma" in state.final_answer
     assert "NBC 2016" in state.final_answer
+
+
+# Test 17 — "1 + 1" Zero Matplotlib / Visualization Tool Calls
+def test_visualization_req_1_plus_1_zero_calls():
+    mock_llm = MockLLM([
+        '{"type": "final", "content": "2"}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="1 + 1")
+
+    assert state.final_answer == "2"
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "generate_analysis_plot" not in called_tools
+    assert len(called_tools) == 0
+
+
+# Test 18 — "Design a low-cost shelter" Normal Workflow, No Automatic Visualization
+def test_visualization_req_design_shelter_no_auto_vis():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "get_climate", "arguments": {"location": "Kerala"}, "reason": "Fetch climate"}',
+        '{"type": "tool", "tool_name": "generate_design", "arguments": {"capacity": 5, "budget": 80000}, "reason": "Generate design"}',
+        '{"type": "tool", "tool_name": "evaluate_thermal", "arguments": {}, "reason": "Check thermal comfort"}',
+        '{"type": "final", "content": "Design generated with thermal score 0.58."}'
+    ])
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = agent.run(user_query="Design a low-cost shelter for 5 people in Kerala")
+
+    assert state.status == "completed"
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "generate_analysis_plot" not in called_tools
+    assert "generate_design" in called_tools
+
+
+# Test 19 — "Analyze the thermal performance" Performs Calculations, No Auto Visualization
+def test_visualization_req_thermal_analysis_no_auto_vis():
+    mock_llm = MockLLM([
+        '{"type": "tool", "tool_name": "analyze_thermal_constraints", "arguments": {"location": "Kerala"}, "reason": "Analyze constraints"}',
+        '{"type": "final", "content": "Thermal performance analyzed. Operative temperature exceeds NBC 2016 limits."}'
+    ])
+    d1 = generate_design(capacity=5, budget=80000, climate="hot_humid")
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = AgentState(
+        user_query="Analyze the thermal performance of the current shelter",
+        current_design=d1,
+        requirements={"location": "Kerala", "climate": "hot_humid"}
+    )
+    agent.run_step(state)
+    agent.run_step(state)
+
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "generate_analysis_plot" not in called_tools
+    assert "analyze_thermal_constraints" in called_tools
+
+
+# Test 20 — "Show me the thermal analysis graph" Qwen Selects Visualization Tool
+def test_visualization_req_explicit_graph_request(tmp_path):
+    plot_file = tmp_path / "agent_plot.png"
+    mock_llm = MockLLM([
+        f'{{"type": "tool", "tool_name": "generate_analysis_plot", "arguments": {{"plot_type": "thermal_analysis", "save_path": "{plot_file.as_posix()}"}}, "reason": "User requested thermal analysis graph"}}',
+        '{"type": "final", "content": "The thermal analysis graph has been generated from current state metrics."}'
+    ])
+    d1 = generate_design(capacity=5, budget=80000, climate="hot_humid")
+    agent = Vishvakarma(llm=mock_llm, verbose=False)
+    state = AgentState(
+        user_query="Show me the thermal analysis graph",
+        current_design=d1,
+        requirements={"location": "Kerala", "climate": "hot_humid", "budget": 80000}
+    )
+    agent.run_step(state)
+    agent.run_step(state)
+
+    called_tools = [c.get("tool_name") for c in state.tool_calls if c.get("type") == "tool"]
+    assert "generate_analysis_plot" in called_tools
+    vis_obs = [o for o in state.observations if o.source == "visualization_tool"]
+    assert len(vis_obs) > 0
+    assert vis_obs[0].status == "CALCULATED"
+    assert plot_file.exists()
+
+
+# Test 21 — Modify Shelter Design and Request Graph (Live State Verification)
+def test_visualization_req_modified_design_live_data(tmp_path):
+    from app.visualization.dashboard import generate_analysis_plot
+
+    # V1 initial design
+    v1 = generate_design(capacity=5, budget=80000, climate="hot_humid")
+    state_v1 = AgentState(
+        user_query="Plot V1",
+        current_design=v1,
+        design_history=[v1],
+        requirements={"climate": "hot_humid", "location": "Kerala", "budget": 80000}
+    )
+    p1 = tmp_path / "v1_plot.png"
+    res_v1 = generate_analysis_plot(state=state_v1, save_path=str(p1))
+
+    # V2 modified design with increased roof ventilation and overhang
+    v2 = modify_design(v1, critique="Improve thermal score")
+    state_v2 = AgentState(
+        user_query="Plot V2",
+        current_design=v2,
+        design_history=[v1, v2],
+        requirements={"climate": "hot_humid", "location": "Kerala", "budget": 80000}
+    )
+    p2 = tmp_path / "v2_plot.png"
+    res_v2 = generate_analysis_plot(state=state_v2, save_path=str(p2))
+
+    # Live verification: V2 has higher thermal score and lower/better indoor temp than V1
+    assert res_v1["metrics"]["design_version"] == 1
+    assert res_v2["metrics"]["design_version"] == 2
+    assert res_v2["metrics"]["thermal_score"] > res_v1["metrics"]["thermal_score"]
+    assert res_v2["metrics"]["indoor_temp_c"] < res_v1["metrics"]["indoor_temp_c"]
+
+
+# Test 22 — Run Same Analysis Twice After Changing a Design Parameter
+def test_visualization_req_run_twice_with_changed_param(tmp_path):
+    from app.visualization.dashboard import generate_analysis_plot
+
+    # Baseline design
+    base_design = generate_design(capacity=5, budget=80000, climate="hot_humid")
+    state = AgentState(
+        user_query="Live analysis",
+        current_design=base_design,
+        requirements={"climate": "hot_humid", "location": "Kerala", "budget": 80000}
+    )
+    out1 = tmp_path / "run1.png"
+    run1 = generate_analysis_plot(state=state, save_path=str(out1))
+    score1 = run1["metrics"]["thermal_score"]
+
+    # Change design parameter manually (e.g. increase roof ventilation)
+    modified_design = dict(base_design)
+    modified_design["roof"] = {"material": "Bamboo", "ventilation": 0.9, "overhang": 1.0}
+    modified_design["walls"] = {"material": "Woven Bamboo", "opening_ratio": 0.40}
+    modified_design["version"] = 3
+    state.current_design = modified_design
+    state.evaluation = None  # Clear cached evaluation so live calculation is triggered
+
+    out2 = tmp_path / "run2.png"
+    run2 = generate_analysis_plot(state=state, save_path=str(out2))
+    score2 = run2["metrics"]["thermal_score"]
+
+    assert score2 > score1
+    assert run2["metrics"]["design_version"] == 3
+    assert run2["metrics"]["indoor_temp_c"] < run1["metrics"]["indoor_temp_c"]
+

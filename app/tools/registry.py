@@ -8,6 +8,7 @@ from app.tools.thermal import evaluate_thermal
 from app.tools.structure import evaluate_structure
 from app.tools.constraints import analyze_thermal_constraints
 from app.memory.memory import save_experience, retrieve_experience
+from app.visualization.dashboard import generate_analysis_plot
 
 TOOLS: Dict[str, Callable[..., Any]] = {
     "get_climate": get_climate,
@@ -19,6 +20,7 @@ TOOLS: Dict[str, Callable[..., Any]] = {
     "modify_design": modify_design,
     "analyze_thermal_constraints": analyze_thermal_constraints,
     "calculate_improvement_cost": calculate_improvement_cost,
+    "generate_analysis_plot": generate_analysis_plot,
     "save_experience": save_experience,
     "retrieve_experience": retrieve_experience,
 }
@@ -70,6 +72,12 @@ TOOL_SCHEMAS: Dict[str, Dict[str, Any]] = {
         "description": "Deterministically adapt/improve shelter design parameters (ventilation, overhang, opening ratio) based on evaluation critique.",
         "arguments": {
             "critique": {"type": "string", "description": "Summary of issues or critique feedback to resolve"}
+        }
+    },
+    "generate_analysis_plot": {
+        "description": "Render and export live 3-panel Matplotlib visualization plots and multi-panel dashboards from CURRENT agent state metrics (thermal operative temp vs NBC 2016 limits, airflow/RH, comfort evolution, architecture blueprint). Call when user requests a graph, plot, dashboard, or visual analysis.",
+        "arguments": {
+            "plot_type": {"type": "string", "description": "Type of visualization (e.g. 'thermal_analysis', 'cost_analysis', 'full_dashboard')"}
         }
     },
     "save_experience": {

@@ -8,14 +8,96 @@ Combines:
 import sys
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from app.visualization.thermal_plots import render_thermal_panel
+from app.visualization.thermal_plots import render_thermal_panel, extract_thermal_metrics
 from app.visualization.architecture_plot import render_architecture_panel
 from app.visualization.video_placeholder import render_video_placeholder, attach_video_animation
+from app.tools.thermal import evaluate_thermal
+from app.tools.cost import evaluate_cost
+
+
+def generate_analysis_plot(
+    state: Optional[Any] = None,
+    plot_type: Optional[str] = "thermal_analysis",
+    save_path: Optional[str] = "data/analysis_dashboard.png",
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Agent Tool: Generate live Matplotlib visualization plots and multi-panel dashboard strictly from CURRENT AgentState.
+    
+    Args:
+        state: Active AgentState containing live design, climate observations, and evaluations.
+        plot_type: Type of visualization requested ('thermal_analysis', 'cost_analysis', 'full_dashboard').
+        save_path: Destination path for exported PNG image.
+        
+    Returns:
+        Structured observation dictionary with status, file path, and live calculated metrics.
+    """
+    if state is None:
+        return {
+            "status": "warning",
+            "visualization_type": plot_type or "thermal_analysis",
+            "data_source": "current_agent_state",
+            "message": "No agent state provided for visualization.",
+            "file_path": None
+        }
+
+    curr_design = getattr(state, "current_design", None) if not isinstance(state, dict) else state.get("current_design")
+    design_hist = getattr(state, "design_history", []) if not isinstance(state, dict) else state.get("design_history", [])
+    constraints = getattr(state, "constraints", []) if not isinstance(state, dict) else state.get("constraints", [])
+
+    if not curr_design and not design_hist and not constraints:
+        return {
+            "status": "warning",
+            "visualization_type": plot_type or "thermal_analysis",
+            "data_source": "current_agent_state",
+            "message": "No active shelter design or thermal analysis found in agent state to visualize. Please run generate_design or analyze_thermal_constraints first.",
+            "file_path": None
+        }
+
+    # Ensure live evaluations are performed deterministically against current design
+    if curr_design and hasattr(state, "evaluation"):
+        reqs = getattr(state, "requirements", {})
+        climate = reqs.get("climate", "hot_humid")
+        budget = float(reqs.get("budget", 80000.0))
+
+        if state.evaluation is None:
+            state.evaluation = {}
+        if "thermal" not in state.evaluation:
+            state.evaluation["thermal"] = evaluate_thermal(design=curr_design, climate=climate)
+        if "cost" not in state.evaluation:
+            state.evaluation["cost"] = evaluate_cost(design=curr_design, budget=budget)
+
+    out_file = generate_analysis_dashboard(state=state, save_path=save_path)
+    metrics = extract_thermal_metrics(state)
+
+    total_cost = None
+    if hasattr(state, "evaluation") and isinstance(state.evaluation, dict):
+        total_cost = state.evaluation.get("cost", {}).get("total_cost")
+
+    return {
+        "status": "success",
+        "visualization_type": plot_type or "thermal_analysis",
+        "data_source": "current_agent_state",
+        "step": getattr(state, "iteration", 0),
+        "file_path": str(out_file),
+        "metrics": {
+            "outdoor_temp_c": metrics.get("outdoor_temp"),
+            "indoor_temp_c": metrics.get("indoor_temp"),
+            "neutral_temp_c": metrics.get("neutral_temp"),
+            "upper_90_limit_c": metrics.get("upper_90_limit"),
+            "thermal_score": metrics.get("thermal_score"),
+            "indoor_air_speed_ms": metrics.get("indoor_air_speed"),
+            "design_version": curr_design.get("version", 1) if curr_design else None,
+            "total_cost_inr": total_cost,
+            "versions_tracked": metrics.get("versions", [])
+        }
+    }
+
 
 
 def generate_analysis_dashboard(
