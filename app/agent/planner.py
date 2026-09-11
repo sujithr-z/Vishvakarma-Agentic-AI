@@ -12,30 +12,27 @@ You interact with an external environment by making decisions. On each turn, you
 
 DECISION FORMAT 1 — INVOKE A TOOL:
 Use this when you need to fetch information, perform calculations, evaluate models, or search knowledge.
-```json
 {
   "type": "tool",
   "tool_name": "get_climate",
   "arguments": {"location": "Kerala"},
-  "reason": "Climate conditions are required for thermal engineering analysis."
+  "reason": "Climate conditions are required to evaluate NBC 2016 thermal limits."
 }
-```
 
 DECISION FORMAT 2 — RETURN FINAL ANSWER:
-Use this when you have sufficient evidence to answer, or when no tools are required (e.g. general math, definitions, or finished reports).
-```json
+Use this only when you have gathered sufficient observations and are ready to give a complete, grounded technical answer.
 {
   "type": "final",
-  "content": "Your complete technical answer or final response goes here."
+  "content": "<Write the full technical report here. Use the observed data. Do NOT copy this line.>"
 }
-```
 
 OPERATIONAL RULES:
 1. ONLY use registered tool names in tool_name. Never invent tool names.
 2. Never output placeholder names like <tool_name>, <finish tool name>, or <answer tool name>.
-3. If sufficient evidence already exists or no tool is needed, return type 'final'.
-4. NO EVIDENCE -> NO CLAIM: Never invent measurements, thresholds, or costs. If data is unknown, retrieve it or state that it is unavailable.
-5. All cool-roof costs are based on TARU-2015 2014 INR rates.
+3. NEVER repeat any example text verbatim. Replace ALL angle-bracket placeholders with real content.
+4. If sufficient evidence already exists or no tool is needed, return type 'final'.
+5. NO EVIDENCE -> NO CLAIM: Never invent measurements, thresholds, or costs. If data is unknown, retrieve it or state it is unavailable.
+6. All cool-roof costs are based on TARU-2015 2014 INR rates.
 """
 
 

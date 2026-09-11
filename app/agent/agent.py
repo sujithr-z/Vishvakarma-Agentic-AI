@@ -365,12 +365,32 @@ class Vishvakarma:
             state.add_trace("TOOL", f"Tool Failure ({tool_name})", {"error": err_str})
             return decision
 
-        # 7. Process Tool Output & Record Labeled Observations
         if tool_name == "get_climate":
             if isinstance(result, dict) and result.get("success", True):
-                state.requirements["climate"] = result.get("climate", state.requirements.get("climate", "hot_humid"))
+                # Normalise field names: climate.py uses temperature_c / humidity_percent / wind_speed_ms
+                temp_c     = result.get("temperature_c") or result.get("temperature")
+                humidity   = result.get("humidity_percent") or result.get("humidity")
+                wind       = result.get("wind_speed_ms") or result.get("wind_speed")
+                # trm (running mean outdoor temp) ≈ temperature_c if not explicitly provided
+                trm        = result.get("trm") or temp_c
+
+                # Store normalised keys so downstream tools can rely on them
+                result.setdefault("temperature", temp_c)
+                result.setdefault("humidity",    humidity)
+                result.setdefault("wind_speed",  wind)
+                result.setdefault("trm",         trm)
+
+                state.requirements["climate"]      = result.get("climate", state.requirements.get("climate", "hot_humid"))
                 state.requirements["climate_data"] = result
-                obs_text = f"Location: {result.get('location')}, Climate Zone: {result.get('climate')}, Temp: {result.get('temperature')}°C, RH: {result.get('humidity')}%, Wind: {result.get('wind_speed')} m/s, Trm: {result.get('trm')}°C"
+
+                obs_text = (
+                    f"Location: {result.get('location')}, "
+                    f"Climate Zone: {result.get('climate')}, "
+                    f"Temp: {temp_c}°C, "
+                    f"RH: {humidity}%, "
+                    f"Wind: {wind} m/s, "
+                    f"Trm: {trm}°C"
+                )
                 state.add_observation(source="climate_tool", status="OBSERVED", content=obs_text, data=result)
                 self._log("OBSERVATION", obs_text)
                 state.add_trace("TOOL", f"Retrieved climate for {result.get('location')}", result)
@@ -381,11 +401,11 @@ class Vishvakarma:
                         agent_run_id=run_id,
                         location=result.get("location", "Unknown"),
                         climate_zone=result.get("climate", "hot_humid"),
-                        temperature_c=result.get("temperature"),
-                        rh_percent=result.get("humidity"),
-                        wind_speed_ms=result.get("wind_speed"),
+                        temperature_c=temp_c,
+                        rh_percent=humidity,
+                        wind_speed_ms=wind,
                         solar_radiation_w_m2=result.get("solar_radiation"),
-                        trm_c=result.get("trm")
+                        trm_c=trm
                     )
                 except Exception:
                     pass
