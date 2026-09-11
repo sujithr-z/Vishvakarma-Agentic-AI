@@ -204,18 +204,18 @@ Open your browser at **[http://localhost:8000](http://localhost:8000)** to:
 
 ## 🧪 Running the Test Suite
 
-Run the full automated test suite covering all 37 test cases:
+Run the full automated test suite covering all 41 test cases:
 
 ```bash
 pytest tests/ -v
 ```
 
 **Test Coverage Summary**:
-- `tests/test_agent.py`: 11 core agent capability tests (requirement extraction, tool selection, JSON validity, failure recovery, state maintenance, design optimization cycle, conversational greetings).
+- `tests/test_agent.py`: 15 core agent capability & critical reasoning audit tests (Observe -> Reason -> Act loop, unbiased prompt, tool failure recovery, invalid action recovery, conditional tool calling Tests A-E, labeled evidence, design optimization cycle, greetings).
 - `tests/test_memory_postgres.py`: 7 PostgreSQL relational memory tests (11-table schema creation, immutable design lineage, run and step logging, episodic experience save/retrieve, prompt injection).
 - `tests/test_tools.py`: 7 deterministic tool tests (climate, constraint engine TC-001..TC-009, cool-roof rates, RAG retrieval).
-- `tests/test_parser.py`: 5 parser robustness tests (markdown wrappers, trailing commas, repetition sanitization, natural language fallback).
-- `tests/test_visualization.py`: 7 Matplotlib visualization tests (Figure 1 metrics extraction & rendering, Figure 2 blueprint loading/fallback, Figure 3 OpenCV video frame animation, 3-panel dashboard PNG export).
+- `tests/test_parser.py`: 4 parser robustness tests (markdown wrappers, trailing commas, repetition sanitization, natural language fallback).
+- `tests/test_visualization.py`: 8 Matplotlib visualization tests (Figure 1 metrics extraction & rendering, Figure 2 blueprint loading/fallback, Figure 3 OpenCV video frame animation, 3-panel dashboard PNG export).
 
 ---
 
@@ -232,6 +232,16 @@ pytest tests/ -v
 | **TC-007** | Roof Insulation Below Code | Roof $R$-value $\ge 3.5\text{ m}^2\cdot\text{K/W}$ | TERI-2021 Table 5 |
 | **TC-008** | Inadequate Roof Overhang Shading | Eaves projection $\ge 0.8\text{ m}$ (Solar & Monsoon shield) | TERI-2021 §4.5 |
 | **TC-009** | High Relative Humidity Wet-Bulb Limit | $\text{RH} > 70\%$ requires air movement over evaporative coolers | TERI-2021 §4.6 |
+
+---
+
+## 👥 Authors & Contributors
+
+- **Sujith R** ([@sujithr-z](https://github.com/sujithr-z))
+- **Abhiyukth Krishna** ([@abhiyukth-krishna](https://github.com/abhiyukth-krishna)) — `krishnaabhiyukth@gmail.com`
+- **Shamsuddin** ([@tricksterunknown](https://github.com/tricksterunknown)) — `shamsshamsuddin0585@gmail.com`
+- **Kamalapriyan** ([@MadScientist-Shadow](https://github.com/MadScientist-Shadow)) — `kamalapriyan8@gmail.com`
+- **Krishnapriya** ([@jewelnbule](https://github.com/jewelnbule)) — `krishnapriya2654@gmail.com`
 
 ---
 
