@@ -8,7 +8,12 @@ from app.tools.thermal import evaluate_thermal
 from app.tools.structure import evaluate_structure
 from app.tools.constraints import analyze_thermal_constraints
 from app.memory.memory import save_experience, retrieve_experience
-from app.visualization.dashboard import generate_analysis_plot
+
+
+def generate_analysis_plot(*args: Any, **kwargs: Any) -> Any:
+    """Lazy proxy preventing dashboard <-> tools import recursion."""
+    from app.visualization.dashboard import generate_analysis_plot as _generate_analysis_plot
+    return _generate_analysis_plot(*args, **kwargs)
 
 TOOLS: Dict[str, Callable[..., Any]] = {
     "get_climate": get_climate,

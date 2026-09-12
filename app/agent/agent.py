@@ -42,21 +42,21 @@ def extract_initial_requirements(query: str) -> Dict[str, Any]:
     if not is_shelter_domain:
         return reqs
 
-    reqs["capacity"] = 5
-    reqs["budget"] = 80000.0
-    reqs["climate"] = "hot_humid"
-    reqs["location"] = "Kerala"
-    reqs["building_type"] = "modular_shelter"
-
     # Extract capacity
     cap_match = re.search(r"(\d+)\s*(?:people|persons|occupants|capacity)", query, re.IGNORECASE)
     if cap_match:
         reqs["capacity"] = int(cap_match.group(1))
 
     # Extract budget
-    budget_match = re.search(r"(?:₹|rs\.?|inr|budget\s*(?:of|is)?\s*)?\s*(\d+[\d,]*)(?:\s*(?:inr|rs|rupees))?", query, re.IGNORECASE)
+    # Require an explicit currency or budget marker; otherwise the old regex
+    # captured the first number in a sentence (usually occupant count).
+    budget_match = re.search(
+        r"(?:₹|rs\.?|inr)\s*(\d+[\d,]*)|budget\s*(?:of|is|under|up\s*to)?\s*₹?\s*(\d+[\d,]*)",
+        query,
+        re.IGNORECASE,
+    )
     if budget_match:
-        val_str = budget_match.group(1).replace(",", "")
+        val_str = next(group for group in budget_match.groups() if group is not None).replace(",", "")
         try:
             val = float(val_str)
             if val >= 1000:
@@ -103,11 +103,13 @@ class Vishvakarma:
     def __init__(
         self,
         llm: Optional[OllamaClient] = None,
-        max_iterations: int = 10,
+        max_iterations: int = 30,
         verbose: bool = True
     ):
         self.llm = llm or OllamaClient()
-        self.max_iterations = max_iterations
+        # Give the model more time to retrieve evidence and validate designs,
+        # but never allow an accidental tool loop to run indefinitely.
+        self.max_iterations = max(1, min(max_iterations, 50))
         self.verbose = verbose
         self.active_run_id: Optional[str] = None
         self.active_building_id: Optional[str] = None
@@ -463,10 +465,18 @@ class Vishvakarma:
 
         elif tool_name == "search_knowledge":
             if isinstance(result, list):
-                state.retrieved_knowledge.extend(result)
+                # Keep the cards themselves in state and expose their complete
+                # text/rule/source to later reasoning and grounding checks.
+                known_ids = {item.get("id") for item in state.retrieved_knowledge}
+                state.retrieved_knowledge.extend(item for item in result if item.get("id") not in known_ids)
                 topics = [r.get("title", r.get("topic", "Principle")) for r in result]
                 obs_text = f"Retrieved {len(result)} engineering principles: {', '.join(topics)}"
-                state.add_observation(source="knowledge_base", status="RETRIEVED", content=obs_text, data=result)
+                evidence_text = "\n".join(
+                    f"[{item.get('id', 'KB-UNKNOWN')}] {item.get('text') or item.get('explanation') or item.get('application', '')} "
+                    f"Rule: {item.get('rule_or_threshold', 'not specified')}. Source: {item.get('source', 'curated KB')}"
+                    for item in result
+                )
+                state.add_observation(source="knowledge_base", status="RETRIEVED", content=f"{obs_text}\n{evidence_text}", data=result)
                 self._log("OBSERVATION", obs_text)
                 state.add_trace("RAG", f"Knowledge retrieved: {', '.join(topics)}", result)
 
@@ -604,7 +614,7 @@ class Vishvakarma:
         """
         Execute full autonomous agent Observe -> Reason -> Act loop.
         """
-        limit = max_iterations or self.max_iterations
+        limit = max(1, min(max_iterations or self.max_iterations, 50))
         reqs = extract_initial_requirements(user_query)
         run_id = f"run_{int(datetime.datetime.now().timestamp())}"
         self.active_run_id = run_id

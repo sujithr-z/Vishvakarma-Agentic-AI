@@ -66,9 +66,9 @@ class OllamaClient:
             "options": {
                 "temperature": temperature,
                 "top_p": 0.9,
-                "repeat_penalty": 1.2,
-                "num_predict": 512,
-                "stop": ["```\n\n", "```json\n\n", "\n\n\n\n"]
+                "repeat_penalty": 1.1,
+                "num_predict": 1024,
+                "stop": ["\n\nUSER:", "\n\n### AGENT", "\n\n====="]
             },
         }
         if system:

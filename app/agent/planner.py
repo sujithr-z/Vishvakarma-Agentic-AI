@@ -114,6 +114,21 @@ def format_observations(state: AgentState) -> str:
     return "\n".join(lines)
 
 
+def format_retrieved_knowledge(knowledge: List[Dict[str, Any]]) -> str:
+    """Render curated KB cards as citation-ready evidence, not just titles."""
+    if not knowledge:
+        return "No curated RAG evidence retrieved yet."
+    lines = []
+    for item in knowledge:
+        evidence = item.get("text") or item.get("explanation") or item.get("application") or ""
+        lines.append(
+            f"- [KB {item.get('id', 'UNKNOWN')}] {item.get('topic', 'Engineering principle')}: "
+            f"{evidence} | Rule: {item.get('rule_or_threshold', 'not specified')} | "
+            f"Source: {item.get('source', 'curated knowledge base')}"
+        )
+    return "\n".join(lines)
+
+
 def build_state_summary(state: AgentState) -> str:
     """Build a concise, objective summary of what is known vs missing without prescribing actions."""
     if state.intent == "general_query":
@@ -123,14 +138,23 @@ def build_state_summary(state: AgentState) -> str:
     # Building State
     if state.current_design:
         d = state.current_design
-        lines.append(f"- Building Design: AVAILABLE ({d.get('name', 'Modular-Shelter')} v{d.get('version', 1)}, Capacity: {d.get('capacity', 5)} occupants, Budget: ₹{d.get('budget', 80000):,.0f}, Floor: {d.get('dimensions', {}).get('floor_area_sqm', 24)} m², Wall Opening: {d.get('openings', {}).get('opening_to_floor_ratio', 0.20)*100:.0f}%, Roof Vent: {'Yes' if d.get('roof', {}).get('ventilation') else 'No'})")
+        dimensions = d.get("dimensions", {})
+        openings = d.get("openings", {})
+        roof = d.get("roof", {})
+        capacity = d.get("capacity", "unknown")
+        budget = d.get("budget")
+        budget_text = f"₹{budget:,.0f}" if isinstance(budget, (int, float)) else "unknown"
+        floor_area = dimensions.get("floor_area_sqm", "unknown")
+        opening_ratio = openings.get("opening_to_floor_ratio")
+        opening_text = f"{opening_ratio * 100:.0f}%" if isinstance(opening_ratio, (int, float)) else "unknown"
+        lines.append(f"- Building Design: AVAILABLE ({d.get('name', 'Modular-Shelter')} v{d.get('version', 1)}, Capacity: {capacity} occupants, Budget: {budget_text}, Floor: {floor_area} m², Wall Opening: {opening_text}, Roof Vent: {'Yes' if roof.get('ventilation') else 'No'})")
     else:
         lines.append("- Building Design: MISSING / NOT YET SPECIFIED")
 
     # Climate State
     if state.requirements.get("climate_data"):
         c = state.requirements["climate_data"]
-        lines.append(f"- Environmental Climate: AVAILABLE (Location: {c.get('location', 'Kerala')}, Zone: {c.get('climate', 'hot_humid')}, Temp: {c.get('temperature', 33.0)}°C, RH: {c.get('humidity', 82.0)}%, Wind: {c.get('wind_speed', 2.8)} m/s, Trm: {c.get('trm', 32.0)}°C)")
+        lines.append(f"- Environmental Climate: AVAILABLE (Location: {c.get('location', 'unknown')}, Zone: {c.get('climate', 'unknown')}, Temp: {c.get('temperature', c.get('temperature_c', 'unknown'))}°C, RH: {c.get('humidity', c.get('humidity_pct', 'unknown'))}%, Wind: {c.get('wind_speed', c.get('wind_speed_ms', 'unknown'))} m/s, Trm: {c.get('trm', 'unknown')}°C)")
     elif state.requirements.get("location"):
         lines.append(f"- Environmental Climate: NOT YET RETRIEVED for '{state.requirements.get('location')}'")
     else:
@@ -154,7 +178,7 @@ def build_state_summary(state: AgentState) -> str:
     # Cost / Improvement Analysis
     if state.cost_impact:
         ci = state.cost_impact
-        lines.append(f"- Improvement Cost: CALCULATED ({ci.get('formatted_total', 'INR 3,200.00')}, 2014 INR base)")
+        lines.append(f"- Improvement Cost: CALCULATED ({ci.get('formatted_total', 'unknown')}, 2014 INR base)")
     elif state.evaluation and "cost" in state.evaluation:
         c_eval = state.evaluation["cost"]
         lines.append(f"- Construction Cost: CALCULATED (Total: ₹{c_eval.get('total_cost', 0):,.0f}, Passed: {c_eval.get('passed', False)})")
@@ -203,13 +227,8 @@ def build_planner_prompt(state: AgentState) -> str:
         return f"""### AGENT STATUS (Step {state.iteration}) | Intent: GREETING:
 User Query: "{state.user_query}"
 
-Respond with ONLY this JSON final decision:
-```json
-{{
-  "type": "final",
-  "content": {json.dumps(welcome_msg)}
-}}
-```"""
+Respond with ONLY this exact JSON (no extra text, no code fences):
+{{"type": "final", "content": {json.dumps(welcome_msg)}}}"""
 
     if intent == "general_query":
         return f"""================================================================================
@@ -217,23 +236,17 @@ USER REQUEST:
 "{state.user_query}"
 ================================================================================
 
-This request is a general question or calculation.
-If no shelter tools are needed, answer directly using type 'final'.
-
-Respond with ONLY a single valid JSON object:
-```json
-{{
-  "type": "final",
-  "content": "Your direct answer here."
-}}
-```"""
+This is a general question. Answer it directly.
+Respond with ONLY a single JSON object (no code fences, no extra text):
+{{"type": "final", "content": "<your direct answer>"}}"""
 
     tools_desc = format_tool_descriptions()
     state_summary = build_state_summary(state)
     obs_summary = format_observations(state)
+    rag_summary = format_retrieved_knowledge(state.retrieved_knowledge)
 
-    climate = state.requirements.get("climate", "hot_humid")
-    location = state.requirements.get("location", "Kerala")
+    climate = state.requirements.get("climate")
+    location = state.requirements.get("location")
     relevant_exps = retrieve_relevant_experiences(
         climate=climate,
         location=location,
@@ -254,6 +267,9 @@ CURRENT SITUATION & STATE (Step {state.iteration}):
 PREVIOUS OBSERVATIONS & EVIDENCE:
 {obs_summary}
 
+CURATED RAG KNOWLEDGE — PRIMARY ENGINEERING REFERENCE:
+{rag_summary}
+
 RELEVANT PREVIOUS EXPERIENCES (FROM POSTGRESQL MEMORY):
 {exp_summary}
 
@@ -265,22 +281,11 @@ Carefully inspect the USER REQUEST, CURRENT SITUATION, and PREVIOUS OBSERVATIONS
 - If you need to fetch data or run engineering calculations, output type 'tool' with a valid tool_name from the registered tools list.
 - If you have gathered sufficient evidence to fulfill the user request, output type 'final' with your complete technical response in 'content'.
 - Do NOT call unnecessary tools.
-- Strict Rule: NO EVIDENCE -> NO CLAIM. Never fabricate missing values.
+    - Strict Rule: NO EVIDENCE -> NO CLAIM. Never fabricate missing values.
+    - Treat PostgreSQL memory as historical context, not proof. Treat curated RAG cards and deterministic tool outputs as evidence.
+    - When using a KB card, cite its KB ID and source in the final response.
 
-Respond with ONLY a single valid JSON object in one of the two formats:
-```json
-{{
-  "type": "tool",
-  "tool_name": "get_climate",
-  "arguments": {{"location": "Kerala"}},
-  "reason": "Need climate observations before running thermal evaluation."
-}}
-```
-OR
-```json
-{{
-  "type": "final",
-  "content": "Final technical report or response."
-}}
-```"""
+Respond with ONLY a single valid JSON object (no markdown fences, no extra text).
+For a tool call: {{"type": "tool", "tool_name": "<name>", "arguments": {{}}, "reason": "<why>"}}
+For a final answer: {{"type": "final", "content": "<your complete grounded technical answer>"}}"""
     return prompt

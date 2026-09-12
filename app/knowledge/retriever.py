@@ -43,6 +43,15 @@ def search_knowledge(
         return []
 
     query_tokens = _tokenize(query)
+    # User-facing climate labels and KB labels are not identical. Normalize only
+    # the filter; never invent a climate when the caller leaves it unspecified.
+    climate_aliases = {
+        "hot_humid": "Warm & Humid",
+        "warm_humid": "Warm & Humid",
+        "hot_dry": "Hot & Dry",
+        "composite": "Composite",
+    }
+    climate_filter = climate_aliases.get(climate, climate) if climate else None
 
     scored_items = []
     for item in items:
@@ -50,7 +59,7 @@ def search_knowledge(
         if category and item.get("category") != category:
             continue
         # Climate filter
-        if climate and item.get("climate") not in [climate, "all"]:
+        if climate_filter and item.get("climate") not in [climate_filter, "all"]:
             continue
         # Component filter
         if building_component and item.get("building_component") not in [building_component, "whole"]:
@@ -77,9 +86,6 @@ def search_knowledge(
             scored_items.append((score, item))
 
     scored_items.sort(key=lambda x: x[0], reverse=True)
-    results = [item for _, item in scored_items[:top_k]]
-
-    if not results and items:
-        results = items[:top_k]
-
-    return results
+    # An empty result is meaningful: returning the first cards would present
+    # unrelated standards as if they supported the user's question.
+    return [item for score, item in scored_items if score > 0][:top_k]
